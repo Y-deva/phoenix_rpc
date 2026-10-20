@@ -1,4 +1,6 @@
 import os
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 import signal
 import sys
 import threading
@@ -7,13 +9,26 @@ from flask import Flask, request, jsonify, Response
 from functools import wraps
 import requests
 
+if not os.path.isfile("config.toml"):
+    import conf_gen
+    if not conf_gen.generate_config():
+        print("[MAIN] config.toml missing and could not be generated. Exiting.")
+        sys.exit(1)
+
 from db import init_db, checkpoint_wal
 import keychain
 from newaddress import generate_address
-from group_tx import handle_listunspent, handle_getbalance
-from unlock import handle_sendtoaddress, set_keypair
+from pstore import (
+    handle_pstore, set_keys as pstore_set_keys,
+    handle_pload, handle_pcancel,
+)
+from group_tx import handle_listunspent, handle_getbalance, handle_listtransactions
+from unlock import handle_sendtoaddress, handle_signrawtransaction, set_keypair
 from utxo_parser import run_parser_loop
+from pow_work import handle_getwork_request, handle_getwork_submit
+from pos_miner import set_falcon_keys as pos_set_falcon, run_pos_miner
 import hashlib
+import argparse
 
 try:
     with open("hello.txt", "r", encoding="utf-8") as f:
@@ -30,19 +45,26 @@ DEMON_PASS = config["daemon"]["password"]
 
 PROXY_HOST = config["proxy"]["host"]
 PROXY_PORT = config["proxy"]["port"]
+PROXY_USER = config["proxy"].get("user") or config["daemon"]["user"]
+PROXY_PASS = config["proxy"].get("password") or config["daemon"]["password"]
 
 app = Flask(__name__)
 
 pubkey, secret = keychain.get_or_create_keypair()
 set_keypair(pubkey, secret)
+pos_set_falcon(pubkey, secret)
 pubkey_hash = hashlib.sha256(pubkey).digest()
+pstore_set_keys(pubkey, secret)
 print(f"[KEYCHAIN] Key loaded: pubkey={len(pubkey)}B secret={len(secret)}B")
 
+
 def check_auth(username, password):
-    return username == DEMON_USER and password == DEMON_PASS
+    return username == PROXY_USER and password == PROXY_PASS
+
 
 def authenticate():
     return Response('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="RPC Proxy"'})
+
 
 def requires_auth(f):
     @wraps(f)
@@ -52,6 +74,7 @@ def requires_auth(f):
             return authenticate()
         return f(*args, **kwargs)
     return decorated
+
 
 @app.route('/', methods=['POST'])
 @requires_auth
@@ -75,6 +98,55 @@ def rpc_proxy():
                 f.write("1")
             return jsonify({"result": info["address"], "error": None, "id": req_id})
 
+        if method == 'pstore':
+            if not params:
+                return jsonify({
+                    "result": None,
+                    "error": {"code": -1, "message": "file path or URL required"},
+                    "id": req_id,
+                }), 400
+            try:
+                result = handle_pstore(params, rpc_config)
+                return jsonify({"result": result, "error": None, "id": req_id})
+            except Exception as e:
+                print(f"[PROXY] pstore error: {e}")
+                return jsonify({
+                    "result": None,
+                    "error": {"code": -1, "message": str(e)},
+                    "id": req_id,
+                }), 400
+                
+        if method == 'pload':
+            if not params:
+                return jsonify({
+                    "result": None,
+                    "error": {"code": -1, "message": "file_id required"},
+                    "id": req_id,
+                }), 400
+            try:
+                # params: [file_id, ext?]
+                result = handle_pload(params, rpc_config)
+                return jsonify({"result": result, "error": None, "id": req_id})
+            except Exception as e:
+                print(f"[PROXY] pload error: {e}")
+                return jsonify({
+                    "result": None,
+                    "error": {"code": -1, "message": str(e)},
+                    "id": req_id,
+                }), 400
+            
+        if method == 'pcancel':
+            try:
+                result = handle_pcancel(params, rpc_config)
+                return jsonify({"result": result, "error": None, "id": req_id})
+            except Exception as e:
+                print(f"[PROXY] pcancel error: {e}")
+                return jsonify({
+                    "result": None,
+                    "error": {"code": -1, "message": str(e)},
+                    "id": req_id,
+                }), 400
+
         if method == 'listunspent':
             return jsonify({
                 "result": handle_listunspent(params, rpc_config),
@@ -87,9 +159,45 @@ def rpc_proxy():
                 "error": None, "id": req_id,
             })
 
+        if method == 'listtransactions':
+            return jsonify({
+                "result": handle_listtransactions(params, rpc_config),
+                "error": None, "id": req_id,
+            })
+
+        if method == 'signrawtransaction':
+            return jsonify({
+                "result": handle_signrawtransaction(params, rpc_config),
+                "error": None, "id": req_id,
+            })
+
         if method == 'sendtoaddress':
             txid = handle_sendtoaddress(params, rpc_config, broadcast=True)
             return jsonify({"result": txid, "error": None, "id": req_id})
+
+        if method == 'getwork':
+            if not params:
+                result = handle_getwork_request(rpc_config, pubkey_hash)
+            else:
+                result = handle_getwork_submit(params[0], rpc_config)
+            return jsonify({"result": result, "error": None, "id": req_id})
+
+        resp = requests.post(
+            DEMON_URL,
+            headers={"Content-Type": "application/json"},
+            auth=(DEMON_USER, DEMON_PASS),
+            json=data,
+            timeout=30,
+        )
+        return Response(resp.text, status=resp.status_code, content_type='application/json')
+
+    except requests.exceptions.RequestException as e:
+        print(f"[PROXY] {method} forward failed: {e}")
+        return jsonify({
+            "result": None,
+            "error": {"code": -1, "message": f"daemon unreachable: {e}"},
+            "id": req_id,
+        }), 502
 
     except Exception as e:
         print(f"[PROXY] {method} error: {e}")
@@ -99,27 +207,33 @@ def rpc_proxy():
             "id": req_id,
         })
 
-    try:
-        resp = requests.post(
-            DEMON_URL,
-            headers={"Content-Type": "application/json"},
-            auth=(DEMON_USER, DEMON_PASS),
-            json=data,
-            timeout=30,
-        )
-        return Response(resp.text, status=resp.status_code, content_type='application/json')
-    except requests.exceptions.RequestException as e:
-        print(f"[PROXY] Forward failed: {e}")
-        return jsonify({"error": str(e)}), 500
 
 def graceful_shutdown(signum, frame):
     print("\n[MAIN] Signal received, shutting down...")
+    try:
+        checkpoint_wal()
+    except Exception:
+        pass
     sys.exit(0)
+
 
 signal.signal(signal.SIGINT, graceful_shutdown)
 signal.signal(signal.SIGTERM, graceful_shutdown)
 
+def _parse_args():
+    p = argparse.ArgumentParser(prog="main.py")
+    p.add_argument("--recover", action="store_true",
+                   help="Start address recovery in background")
+    p.add_argument("--recover-from", type=int, default=1_100_000,
+                   help="Recover from height (1100000 by default)")
+    p.add_argument("--recover-batch", type=int, default=20,
+                   help="Address batch size")
+    return p.parse_args()
+
+
 if __name__ == '__main__':
+    args = _parse_args()
+    
     init_db()
     checkpoint_wal()
 
@@ -130,6 +244,34 @@ if __name__ == '__main__':
         daemon=True,
     )
     parser_thread.start()
+    
+    if args.recover:
+        from recover import recover as run_recover
+
+        def _recover_worker():
+            try:
+                run_recover(
+                    rpc_config,
+                    start_height=args.recover_from,
+                    batch_size=args.recover_batch,
+                    pubkey_hash=pubkey_hash,
+                    master_key=keychain.get_master_key(),
+                )
+            except Exception as e:
+                print(f"[MAIN] Recover failed: {e}")
+
+        recover_thread = threading.Thread(target=_recover_worker, daemon=True)
+        recover_thread.start()
+
+        print(f"[MAIN] Recover started in background (from height {args.recover_from})")
+
+    pos_thread = threading.Thread(
+        target=run_pos_miner,
+        args=(rpc_config,),
+        daemon=True,
+    )
+    pos_thread.start()
+    print("[MAIN] PoS miner started in background")
 
     print(f"[MAIN] Proxy on {PROXY_HOST}:{PROXY_PORT}")
     print(f"[MAIN] Forwarding to {DEMON_URL}")

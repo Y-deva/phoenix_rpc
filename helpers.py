@@ -1,8 +1,14 @@
 import hashlib
 import struct
+import toml
 from io import BytesIO
 
 import base58
+
+with open("config.toml") as f:
+    config = toml.load(f)
+
+F_TESTNET = bool(config["network"]["testnet"])
 
 OP_DUP          = 0x76
 OP_HASH160      = 0xa9
@@ -17,7 +23,7 @@ OP_TRUE         = 0x51
 OP_FALCONVERIFY = 0xb9
 
 SIGHASH_ALL = 1
-ONE_COIN    = 1e6
+ONE_COIN    = 1_000_000
 
 PUBKEY_SIZE  = 897
 SIG_MAX_SIZE = 666
@@ -25,13 +31,25 @@ CHUNK_SIZE   = 520
 
 MAX_OPRETURN_BYTES = 80
 
-PREFIX_P2PKH_MAIN   = 0x08
-PREFIX_P2PKH_TEST   = 0x6F
-PREFIX_P2SH_MAIN    = 0x14
-PREFIX_P2SH_TEST    = 0xC4
+if F_TESTNET:
+    PREFIX_P2PKH = 0x6F
+    PREFIX_P2SH  = 0xC4
+else:
+    PREFIX_P2PKH = 0x08
+    PREFIX_P2SH  = 0x14
+    
+try:
+    from Crypto.Hash import RIPEMD160
+    def _ripemd160(data: bytes) -> bytes:
+        h = RIPEMD160.new()
+        h.update(data)
+        return h.digest()
+except ImportError:
+    def _ripemd160(data: bytes) -> bytes:
+        return hashlib.new('ripemd160', data).digest()
 
 def hash160(data: bytes) -> bytes:
-    return hashlib.new('ripemd160', hashlib.sha256(data).digest()).digest()
+    return _ripemd160(hashlib.sha256(data).digest())
 
 def base58check_encode(payload: bytes, version_byte: int) -> str:
     versioned = bytes([version_byte]) + payload
@@ -64,12 +82,13 @@ def push_data(data: bytes) -> bytes:
 
 def address_to_output_script(addr: str) -> bytes:
     version, h160 = base58_decode_check(addr)
-    if version in (PREFIX_P2PKH_MAIN, PREFIX_P2PKH_TEST):
+    if version == PREFIX_P2PKH:
         return bytes([OP_DUP, OP_HASH160, 0x14]) + h160 + bytes([OP_EQUALVERIFY, OP_CHECKSIG])
-    elif version in (PREFIX_P2SH_MAIN, PREFIX_P2SH_TEST):
+    elif version == PREFIX_P2SH:
         return bytes([OP_HASH160, 0x14]) + h160 + bytes([OP_EQUAL])
     else:
-        raise ValueError(f"Unsupported address version: 0x{version:02x}")
+        raise ValueError(f"Unsupported address version: 0x{version:02x} "
+                         f"(expected P2PKH=0x{PREFIX_P2PKH:02x} or P2SH=0x{PREFIX_P2SH:02x})")
 
 
 def script_hash_to_script_pubkey(script_hash: bytes) -> bytes:
@@ -101,6 +120,7 @@ def build_redeem_script(salt: bytes, pubkey_hash: bytes) -> bytes:
         bytes([OP_TRUE])
     )
 
+
 def chunks(data: bytes, size: int):
     return [data[i:i+size] for i in range(0, len(data), size)]
 
@@ -113,7 +133,6 @@ def varint(n: int) -> bytes:
         return b'\xfe' + struct.pack('<I', n)
     else:
         return b'\xff' + struct.pack('<Q', n)
-
 
 def serialize_tx(version: int, ntime: int, inputs: list, outputs: list, locktime: int = 0) -> bytes:
     out = BytesIO()
@@ -136,6 +155,72 @@ def serialize_tx(version: int, ntime: int, inputs: list, outputs: list, locktime
     out.write(struct.pack('<I', locktime))
     return out.getvalue()
 
+def parse_tx(raw: bytes) -> dict:
+    off = [0]
+
+    def read(n):
+        data = raw[off[0]:off[0] + n]
+        if len(data) != n:
+            raise ValueError(f"Unexpected end of tx at offset {off[0]}")
+        off[0] += n
+        return data
+
+    def read_varint():
+        b = raw[off[0]]
+        if b < 0xfd:
+            off[0] += 1
+            return b
+        elif b == 0xfd:
+            v = struct.unpack_from('<H', raw, off[0] + 1)[0]
+            off[0] += 3
+            return v
+        elif b == 0xfe:
+            v = struct.unpack_from('<I', raw, off[0] + 1)[0]
+            off[0] += 5
+            return v
+        else:
+            v = struct.unpack_from('<Q', raw, off[0] + 1)[0]
+            off[0] += 9
+            return v
+
+    version = struct.unpack('<I', read(4))[0]
+    ntime   = struct.unpack('<I', read(4))[0]
+
+    vin_count = read_varint()
+    vin = []
+    for _ in range(vin_count):
+        prev_hash_internal = read(32)
+        prev_n = struct.unpack('<I', read(4))[0]
+        script_len = read_varint()
+        script_sig = read(script_len)
+        sequence = struct.unpack('<I', read(4))[0]
+        vin.append({
+            'txid': prev_hash_internal[::-1],
+            'vout': prev_n,
+            'scriptSig': script_sig,
+            'sequence': sequence,
+        })
+
+    vout_count = read_varint()
+    vout = []
+    for _ in range(vout_count):
+        amount = struct.unpack('<q', read(8))[0]
+        script_len = read_varint()
+        script = read(script_len)
+        vout.append({'amount': amount, 'script': script})
+
+    locktime = struct.unpack('<I', read(4))[0]
+
+    if off[0] != len(raw):
+        raise ValueError(f"Trailing {len(raw) - off[0]} bytes after tx")
+
+    return {
+        'version': version,
+        'ntime': ntime,
+        'vin': vin,
+        'vout': vout,
+        'locktime': locktime,
+    }
 
 def compute_txid(raw_tx: bytes) -> str:
     return hashlib.sha256(hashlib.sha256(raw_tx).digest()).digest()[::-1].hex()
