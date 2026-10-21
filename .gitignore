@@ -1,3 +1,4 @@
+# --- Local secrets / runtime state (never commit) ---
 config.toml
 keypair.bin
 wallet.json
@@ -15,37 +16,50 @@ last_known_block.txt
 last_parsed_block.txt
 wallet_changed.flag
 
+# --- Python virtual environments (root of the project) ---
+/.venv/
+/.dsh-pyenv/
+/venv/
+/env/
+/bin/
+/lib/
+/lib64/
+/include/
+/share/
+/pyvenv.cfg
+pip-selfcheck.json
+
+# --- Python build artifacts and caches ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-env/
-venv/
-.venv/
-bin/
-lib/
-lib64/
-include/
-pip-selfcheck.json
 *.egg-info/
-.pytest_cache/
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
+/.coverage
+/htmlcov/
+/dist/
 
+# --- Daemon build output ---
+/build/
+
+# --- Editor / OS junk ---
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
+# --- Visual Studio user files ---
+*.suo
+*.vcxproj.user
+
+# --- Logs ---
 *.log
 debug.log
 
 .DS_Store
 Thumbs.db
-
-bin
-lib
-lib64
-include
-share
-pyvenv.cfg

@@ -55,3 +55,25 @@ def generate_address(
         "script_hash": script_hash,
         "account": account,
     }
+
+
+def list_addresses() -> list[dict]:
+    """Return every generated address without exposing key material."""
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            "SELECT address, account, counter, created_at FROM wallets "
+            "ORDER BY counter IS NULL, counter, created_at"
+        )
+        return [
+            {
+                "address": row[0],
+                "account": row[1] or "",
+                "counter": row[2],
+                "created_at": row[3],
+            }
+            for row in c.fetchall()
+        ]
+    finally:
+        conn.close()

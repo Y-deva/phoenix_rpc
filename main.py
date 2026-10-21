@@ -17,7 +17,7 @@ if not os.path.isfile("config.toml"):
 
 from db import init_db, checkpoint_wal
 import keychain
-from newaddress import generate_address
+from newaddress import generate_address, list_addresses
 from pstore import (
     handle_pstore, set_keys as pstore_set_keys,
     handle_pload, handle_pcancel,
@@ -97,6 +97,9 @@ def rpc_proxy():
             with open("wallet_changed.flag", "w") as f:
                 f.write("1")
             return jsonify({"result": info["address"], "error": None, "id": req_id})
+
+        if method == 'listaddresses':
+            return jsonify({"result": list_addresses(), "error": None, "id": req_id})
 
         if method == 'pstore':
             if not params:
