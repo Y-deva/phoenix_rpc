@@ -14,6 +14,8 @@ That's it. Enjoy.
 
 ## Graphical interface
 
+<img width="1360" height="880" alt="image" src="https://github.com/user-attachments/assets/ffa06c1b-8a8a-4ebd-bb41-6eeea98681b4" />
+
 The PyQt6 wallet lives in `phoenix_gui` and talks to the same local proxy:
 
 ```bash
