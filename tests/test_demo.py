@@ -62,3 +62,14 @@ def test_derive_addresses_fallback(demo: DemoService):
 
 def test_demo_fee_uses_base_units(demo: DemoService):
     assert demo.fee_amount(1000, 1) == Decimal(1000) / COIN
+
+
+def test_demo_pstore_roundtrip(demo: DemoService, tmp_path):
+    source = tmp_path / "demo.txt"
+    source.write_text("demo pstore", encoding="utf-8")
+    result = demo.pstore(str(source), "comment")
+    assert len(result["file_id"]) == 64
+    assert result["size"] > 0
+    download = demo.pload(result["file_id"], "txt")
+    assert download["path"].endswith(".txt")
+    assert demo.pcancel()["cancelled"] == 0

@@ -32,6 +32,7 @@ PAGES = (
     "receive",
     "transactions",
     "coins",
+    "storage",
     "analytics",
     "console",
     "settings",
@@ -57,6 +58,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="file name suffix, for example -light",
     )
     parser.add_argument(
+        "--language",
+        default="ru",
+        help="interface language code for the capture",
+    )
+    parser.add_argument(
         "--pages",
         default=",".join(PAGES),
         help="comma separated page ids to capture",
@@ -79,6 +85,7 @@ def run() -> int:
     with tempfile.TemporaryDirectory(prefix="phoenix-shot-") as temporary:
         settings = Settings(Path(temporary) / "settings.ini")
         settings.set("behavior/refresh_seconds", 600)
+        settings.set("appearance/language", args.language)
         themes = ThemeManager(settings, app)
         themes.apply(args.theme)
         window = MainWindow(project, settings, DemoService(), themes, demo=True)

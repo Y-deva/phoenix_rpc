@@ -268,6 +268,28 @@ class WalletService:
         """Decode a raw transaction for inspection before broadcast."""
         return self.client.call("decoderawtransaction", [raw_hex])
 
+    def pstore(self, source: str, comment: str = "") -> dict[str, Any]:
+        """Upload a local file or an HTTP(S) URL through the pstore proxy.
+
+        The proxy returns the id of the whole graph, its transaction count
+        and size. The id is what the user needs to download the file later.
+        """
+        params: list[Any] = [source]
+        if comment:
+            params.append(comment)
+        result = self.client.call("pstore", params)
+        return result if isinstance(result, dict) else {"file_id": str(result or "")}
+
+    def pload(self, file_id: str, extension: str = "bin") -> dict[str, Any]:
+        """Download a pstore file by graph id into the system Downloads folder."""
+        result = self.client.call("pload", [file_id, extension or "bin"])
+        return result if isinstance(result, dict) else {"path": str(result or "")}
+
+    def pcancel(self) -> dict[str, Any]:
+        """Cancel pending pstore transactions and repair the anchor."""
+        result = self.client.call("pcancel", [])
+        return result if isinstance(result, dict) else {}
+
     def available_addresses(self) -> list[AddressInfo]:
         """Return addresses, falling back to those derived from activity."""
         if self.addresses_supported is False:

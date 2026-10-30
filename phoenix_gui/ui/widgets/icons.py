@@ -13,7 +13,6 @@ from PyQt6.QtGui import (
     QColor,
     QFont,
     QIcon,
-    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
@@ -361,11 +360,8 @@ def brand_mark(theme, size: int = 36) -> QPixmap:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     painter.scale(size * scale / 40.0, size * scale / 40.0)
-    gradient = QLinearGradient(0, 0, 40, 40)
-    gradient.setColorAt(0.0, theme.color("accent"))
-    gradient.setColorAt(1.0, theme.color("accent_pressed"))
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(gradient)
+    painter.setBrush(QColor(theme.color("accent")))
     painter.drawRoundedRect(QRectF(0, 0, 40, 40), 12, 12)
     painter.setPen(QPen(theme.color("accent_text"), 2.2))
     font = QFont("DejaVu Sans")

@@ -35,6 +35,7 @@ from ...rpc.models import (
 from ...rpc.service import balance_summary, derive_addresses
 from ..widgets.card import Card, EmptyState, KeyValueRow, Pill, StatCard, action_button
 from ..widgets.chart import ChartPanel, Sparkline
+from ..widgets.fields import IconButton
 from ..widgets.rows import TransactionRow
 from .base import ScrollPage
 
@@ -72,10 +73,12 @@ class OverviewPage(ScrollPage):
         self.activity_chart = ChartPanel(
             "Активность",
             "Поступления и отправления за последние 14 дней",
+            translations=self.context.translations,
         )
         self.distribution_chart = ChartPanel(
             "Структура баланса",
             "Доступно, в ожидании и незрелые монеты",
+            translations=self.context.translations,
         )
         middle.addWidget(self.activity_chart, 2)
         middle.addWidget(self.distribution_chart, 1)
@@ -84,9 +87,28 @@ class OverviewPage(ScrollPage):
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
         bottom.setSpacing(14)
-        bottom.addWidget(self._build_recent(), 2)
+        self.recent_card = self._build_recent()
+        bottom.addWidget(self.recent_card, 2)
         bottom.addWidget(self._build_network(), 1)
         self.body.addLayout(bottom)
+        self.protect(
+            self.balance_label,
+            self.hero_caption,
+            self.hero_spark,
+            self.pending_card.value_label,
+            self.pending_card.caption_label,
+            self.immature_card.value_label,
+            self.immature_card.caption_label,
+            self.addresses_card.value_label,
+            self.addresses_card.caption_label,
+            self.utxo_card.value_label,
+            self.utxo_card.caption_label,
+            self.activity_chart.canvas,
+            self.distribution_chart.canvas,
+        )
+        if self.context.privacy is not None:
+            self.context.privacy.changed.connect(self._on_privacy_changed)
+            self._sync_privacy_button()
 
     def _build_hero(self) -> Card:
         """Build the primary balance card."""
@@ -106,7 +128,19 @@ class OverviewPage(ScrollPage):
         self.balance_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        card.add(self.balance_label)
+        balance_row = QHBoxLayout()
+        balance_row.setContentsMargins(0, 0, 0, 0)
+        balance_row.setSpacing(8)
+        balance_row.addWidget(self.balance_label, 1)
+        self.privacy_button = IconButton(
+            "eye",
+            self.tokens.get("muted", "#A7B1C2"),
+            self.tr_text("Скрыть баланс"),
+            30,
+        )
+        self.privacy_button.clicked.connect(self._toggle_privacy)
+        balance_row.addWidget(self.privacy_button, 0, Qt.AlignmentFlag.AlignTop)
+        card.add_layout(balance_row)
         self.hero_caption = QLabel("Подтвержденные и готовые к трате входы")
         self.hero_caption.setObjectName("Muted")
         self.hero_caption.setWordWrap(True)
@@ -228,6 +262,25 @@ class OverviewPage(ScrollPage):
         self.recent_empty.setVisible(False)
         card.add(self.recent_empty)
         return card
+
+    def _toggle_privacy(self) -> None:
+        """Toggle the global privacy mode from the balance card."""
+        if self.context.privacy is not None:
+            self.context.privacy.toggle()
+
+    def _on_privacy_changed(self, hidden: bool) -> None:
+        """Reflect the global privacy state on the eye button."""
+        self._sync_privacy_button()
+
+    def _sync_privacy_button(self) -> None:
+        """Update the eye icon and tooltip to match the current state."""
+        if not hasattr(self, "privacy_button"):
+            return
+        hidden = bool(self.context.privacy and self.context.privacy.hidden)
+        self.privacy_button.set_icon_name("eye-off" if hidden else "eye")
+        self.privacy_button.setToolTip(
+            self.tr_text("Показать баланс" if hidden else "Скрыть баланс")
+        )
 
     def _build_network(self) -> Card:
         """Build the node and synchronization card."""
@@ -363,8 +416,13 @@ class OverviewPage(ScrollPage):
         )[:6]
         self.recent_empty.setVisible(not rows)
         for transaction in rows:
-            row = TransactionRow(transaction, self.tokens)
+            row = TransactionRow(
+                transaction,
+                self.tokens,
+                translations=self.context.translations,
+            )
             row.clicked.connect(self.transactionSelected.emit)
+            self.protect(row.amount_label)
             self.recent_layout.addWidget(row)
 
     def _render_activity(self) -> None:

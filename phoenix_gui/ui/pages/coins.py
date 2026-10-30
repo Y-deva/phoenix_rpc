@@ -151,6 +151,12 @@ class CoinsPage(BasePage):
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._context_menu)
         root.addWidget(self.table, 1)
+        self.protect(
+            self.available_pill,
+            self.selected_pill,
+            self.count_pill,
+            self.table.viewport(),
+        )
 
         self.footer = QLabel("")
         self.footer.setObjectName("Muted")
@@ -187,8 +193,18 @@ class CoinsPage(BasePage):
         self.refresh_button.setEnabled(True)
 
     def _rebuild_table(self) -> None:
-        """Rebuild the UTXO table from the loaded list."""
+        """Rebuild the UTXO table while preserving user state.
+
+        Auto-refresh must not throw away checked inputs or the column the
+        user sorted by. That is especially noticeable when selecting the
+        newest UTXOs right before a background update.
+        """
         mono = self.themes.mono_font
+        header = self.table.horizontalHeader()
+        sort_column = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        scroll_position = self.table.verticalScrollBar().value()
+        selected = {(utxo.txid, utxo.vout) for utxo in self._selected_utxos()}
         self._updating = True
         self.table.begin_update()
         self.table.setRowCount(0)
@@ -201,7 +217,11 @@ class CoinsPage(BasePage):
                 | Qt.ItemFlag.ItemIsSelectable
                 | Qt.ItemFlag.ItemIsUserCheckable
             )
-            check.setCheckState(Qt.CheckState.Unchecked)
+            check.setCheckState(
+                Qt.CheckState.Checked
+                if (utxo.txid, utxo.vout) in selected
+                else Qt.CheckState.Unchecked
+            )
             check.setData(Qt.ItemDataRole.UserRole, utxo)
             check.setToolTip(f"{utxo.txid}:{utxo.vout}")
             self.table.setItem(row, 0, check)
@@ -242,6 +262,7 @@ class CoinsPage(BasePage):
             else:
                 status_text = "Доступен"
                 status_color = self.tokens.get("positive", "#3DD6A0")
+            status_text = self.tr_text(status_text)
             self.table.setItem(
                 row,
                 5,
@@ -256,10 +277,16 @@ class CoinsPage(BasePage):
             )
             height_item.setForeground(self._brush(self.tokens.get("muted", "#A7B1C2")))
             self.table.setItem(row, 6, height_item)
-        self.table.end_update(sort_column=1, ascending=False)
+        if sort_column < 0:
+            sort_column = 1
+            ascending = False
+        else:
+            ascending = sort_order == Qt.SortOrder.AscendingOrder
+        self.table.end_update(sort_column=sort_column, ascending=ascending)
         self._updating = False
         self._filter_rows()
         self._update_summary()
+        self.table.verticalScrollBar().setValue(scroll_position)
 
     def _filter_rows(self) -> None:
         """Apply the text and availability filters."""
@@ -290,11 +317,13 @@ class CoinsPage(BasePage):
             (utxo.amount for utxo in self._utxos if utxo.spendable), Decimal("0")
         )
         selected = sum((utxo.amount for utxo in self._selected_utxos()), Decimal("0"))
-        self.available_pill.set_text(f"Доступно: {format_nvc(available)}")
+        self.available_pill.set_text(self.tr_text(f"Доступно: {format_nvc(available)}"))
         self.selected_pill.set_text(
-            f"Выбрано: {format_nvc(selected)} ({len(self._selected_utxos())})"
+            self.tr_text(
+                f"Выбрано: {format_nvc(selected)} ({len(self._selected_utxos())})"
+            )
         )
-        self.count_pill.set_text(f"Выходов: {len(self._utxos)}")
+        self.count_pill.set_text(self.tr_text(f"Выходов: {len(self._utxos)}"))
         self.send_button.setEnabled(bool(self._selected_utxos()))
         self._update_footer()
 
@@ -304,8 +333,9 @@ class CoinsPage(BasePage):
             1 for row in range(self.table.rowCount()) if not self.table.isRowHidden(row)
         )
         self.footer.setText(
-            f"Показано {visible} из {self.table.rowCount()} выходов. "
-            "Флажок слева включает UTXO в ручную отправку."
+            self.tr_text(f"Показано {visible} из {self.table.rowCount()} выходов.")
+            + " "
+            + self.tr_text("Флажок слева включает UTXO в ручную отправку.")
         )
 
     def _selected_utxos(self) -> list[Utxo]:

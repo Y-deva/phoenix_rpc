@@ -138,9 +138,10 @@ class ConsolePage(BasePage):
         """Print a short welcome block."""
         muted = self.tokens.get("muted", "#A7B1C2")
         accent = self.tokens.get("accent", "#FF8A3D")
-        self.output.append_line("Консоль Phoenix RPC", accent, bold=True)
+        self.output.append_line(self.tr_text("Консоль Novacoin RPC"), accent, bold=True)
         self.output.append_line(
-            "Введите help для справки демона или выберите метод справа.", muted
+            self.tr_text("Введите help для справки демона или выберите метод справа."),
+            muted,
         )
         self.output.append_line("", muted)
 

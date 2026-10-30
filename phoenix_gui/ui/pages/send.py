@@ -48,7 +48,7 @@ class SendPage(ScrollPage):
 
     page_id = "send"
     page_title = "Отправка"
-    page_subtitle = "Перевод NVC с контролем адреса, комиссии и входов"
+    page_subtitle = "Перевод NVC с контролем адреса и входов"
 
     def __init__(self, context, parent: QWidget | None = None) -> None:
         """Initialize the SendPage instance."""
@@ -77,7 +77,7 @@ class SendPage(ScrollPage):
         self.mode_control.add_segment(
             "expert",
             "Эксперт",
-            "Ручной выбор входов, собственная комиссия и сдача.",
+            "Ручной выбор входов и расчет сдачи.",
         )
         self.mode_control.valueChanged.connect(self._switch_mode)
         toolbar.addWidget(self.mode_control)
@@ -103,10 +103,18 @@ class SendPage(ScrollPage):
         self.expert_card = self._build_expert_card()
         left.addWidget(self.expert_card, 1)
         columns.addLayout(left, 2)
-        columns.addWidget(self._build_summary_card(), 1)
+        self.summary_card = self._build_summary_card()
+        columns.addWidget(self.summary_card, 1)
         self.body.addLayout(columns, 1)
         self.body.addWidget(self._build_parameters_card())
         self.body.addStretch(1)
+        self.protect(
+            self.available_pill,
+            self.summary_amount.value_label,
+            self.summary_change.value_label,
+            self.summary_inputs.value_label,
+            self.coin_table.viewport(),
+        )
 
         self._switch_mode("simple")
 
@@ -120,7 +128,6 @@ class SendPage(ScrollPage):
         grid.setContentsMargins(0, 0, 0, 0)
         grid.setHorizontalSpacing(28)
         grid.setVerticalSpacing(6)
-        fee = KeyValueRow("Комиссия", f"{self.config.sat_per_byte} sat/byte", mono=True)
         dust = KeyValueRow(
             "Пылевой порог",
             format_nvc(from_sat(self.config.dust_threshold_sat)),
@@ -128,10 +135,9 @@ class SendPage(ScrollPage):
         )
         comment = KeyValueRow("Комментарий", "до 80 байт, OP_RETURN")
         signing = KeyValueRow("Подпись", "локально в прокси")
-        grid.addWidget(fee, 0, 0)
-        grid.addWidget(dust, 0, 1)
-        grid.addWidget(comment, 1, 0)
-        grid.addWidget(signing, 1, 1)
+        grid.addWidget(dust, 0, 0)
+        grid.addWidget(comment, 0, 1)
+        grid.addWidget(signing, 1, 0, 1, 2)
         card.add_layout(grid)
         return card
 
@@ -142,7 +148,7 @@ class SendPage(ScrollPage):
         title.setObjectName("CardTitle")
         card.add(title)
         self.address_input = QLineEdit()
-        self.address_input.setPlaceholderText("Введите адрес Phoenix")
+        self.address_input.setPlaceholderText("Введите адрес получателя")
         self.address_input.setClearButtonEnabled(True)
         self.address_input.setMinimumHeight(38)
         self.address_input.setToolTip(
@@ -190,7 +196,7 @@ class SendPage(ScrollPage):
         amount_row.addWidget(self.amount_field, 1)
         self.max_button = QPushButton("Максимум")
         self.max_button.setObjectName("GhostButton")
-        self.max_button.setToolTip("Подставить максимальную сумму с учетом комиссии")
+        self.max_button.setToolTip("Подставить максимальную доступную сумму")
         self.max_button.clicked.connect(self._fill_max)
         amount_row.addWidget(self.max_button, 0, Qt.AlignmentFlag.AlignBottom)
         card.add_layout(amount_row)
@@ -256,9 +262,7 @@ class SendPage(ScrollPage):
             row_height=38,
         )
         self.coin_table.setMinimumHeight(260)
-        self.coin_table.setToolTip(
-            "Отметьте входы вручную. Комиссия рассчитывается по их количеству."
-        )
+        self.coin_table.setToolTip("Отметьте входы вручную для ручной отправки.")
         self.coin_table.set_empty_message(
             "Нет доступных входов",
             "Дождитесь подтверждения поступлений или обновите список.",
@@ -279,16 +283,12 @@ class SendPage(ScrollPage):
         title.setObjectName("CardTitle")
         card.add(title)
         self.summary_amount = KeyValueRow("Сумма", "-")
-        self.summary_fee = KeyValueRow("Комиссия", "-")
         self.summary_change = KeyValueRow("Сдача", "-")
         self.summary_inputs = KeyValueRow("Входы", "-")
-        self.summary_total = KeyValueRow("Итого", "-")
         for row in (
             self.summary_amount,
-            self.summary_fee,
             self.summary_change,
             self.summary_inputs,
-            self.summary_total,
         ):
             card.add(row)
         card.add(Divider())
@@ -467,9 +467,11 @@ class SendPage(ScrollPage):
     def _on_comment_changed(self, text: str) -> None:
         """Update the byte counter and recompute the fee."""
         byte_count = len(text.encode("utf-8"))
-        self.comment_field.set_hint(f"{byte_count} / 80 байт")
+        self.comment_field.set_hint(self.tr_text(f"{byte_count} / 80 байт"))
         valid, message = validate_comment(text)
-        self.comment_field.set_error("" if valid else "Комментарий длиннее 80 байт")
+        self.comment_field.set_error(
+            "" if valid else self.tr_text("Комментарий длиннее 80 байт")
+        )
         self._recompute()
 
     def _fill_max(self) -> None:
@@ -494,7 +496,7 @@ class SendPage(ScrollPage):
         )
         maximum = total - fee
         if maximum <= 0:
-            self.notify("Суммы не хватает даже на комиссию", 4000)
+            self.notify("Недостаточно средств для перевода", 4000)
             return
         self.amount_input.setText(f"{maximum:.8f}")
 
@@ -546,7 +548,7 @@ class SendPage(ScrollPage):
             self.send_button.setEnabled(False)
             return
         if not comment_ok:
-            self.send_hint.setText("Сократите комментарий до 80 байт.")
+            self.send_hint.setText(self.tr_text("Сократите комментарий до 80 байт."))
             self.send_button.setEnabled(False)
             return
         if self._mode == "expert":
@@ -590,10 +592,8 @@ class SendPage(ScrollPage):
         """Reset the right-hand totals."""
         for row in (
             self.summary_amount,
-            self.summary_fee,
             self.summary_change,
             self.summary_inputs,
-            self.summary_total,
         ):
             row.set_value("-")
         self.selection_pill.set_text("Выбрано: 0")
@@ -602,18 +602,11 @@ class SendPage(ScrollPage):
     def _show_plan(self, plan: SendPlan, address: str) -> None:
         """Render a validated send plan."""
         self.summary_amount.set_value(f"{format_nvc(plan.amount)}")
-        self.summary_fee.set_value(f"{format_nvc(plan.fee)}")
         self.summary_change.set_value(
-            f"{format_nvc(plan.change)}"
-            if plan.has_change
-            else "Нет (поглощена комиссией)"
+            f"{format_nvc(plan.change)}" if plan.has_change else "Нет"
         )
         self.summary_inputs.set_value(str(plan.input_count))
-        self.summary_total.set_value(f"{format_nvc(plan.amount + plan.fee)}")
-        self.send_hint.setText(
-            f"Комиссия рассчитана по размеру {plan.size} байт. "
-            "Проверьте адрес перед отправкой."
-        )
+        self.send_hint.setText("Проверьте адрес и сумму перед отправкой.")
         if self._mode == "expert":
             selected = self._selected_utxos()
             total = sum((utxo.amount for utxo in selected), Decimal("0"))
@@ -621,14 +614,13 @@ class SendPage(ScrollPage):
             self.selection_pill.set_level("accent" if selected else "neutral")
             self.coin_footer.setText(
                 f"Выбрано {len(selected)} входов на {format_nvc(total)}. "
-                f"Комиссия {format_nvc(plan.fee)}, сдача {format_nvc(plan.change)}."
+                f"Сдача {format_nvc(plan.change)}."
             )
         else:
             self.coin_footer.setText("")
         if self.settings.verbosity >= 2:
             self.privacy_note.setText(
-                f"Оценка размера: {plan.size} байт, "
-                f"ставка {self.config.sat_per_byte} sat/byte. "
+                f"Оценка размера: {plan.size} байт. "
                 "Подпись Falcon занимает около 1800 байт на вход."
             )
         else:

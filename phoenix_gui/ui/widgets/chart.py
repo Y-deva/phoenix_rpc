@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Iterable, Sequence
+from typing import TYPE_CHECKING, Iterable, Sequence
 
 import matplotlib
 
@@ -12,7 +12,7 @@ matplotlib.use("QtAgg")
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
 from PyQt6.QtCore import QPointF, QRectF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen  # noqa: E402
+from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QAbstractScrollArea,
     QApplication,
@@ -24,6 +24,9 @@ from PyQt6.QtWidgets import (  # noqa: E402
 )
 
 from ...core.formatting import format_amount  # noqa: E402
+
+if TYPE_CHECKING:
+    from ...i18n import TranslationManager
 
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -64,10 +67,15 @@ class ChartPanel(QFrame):
     """Card with a title and a themed matplotlib chart."""
 
     def __init__(
-        self, title: str, subtitle: str = "", parent: QWidget | None = None
+        self,
+        title: str,
+        subtitle: str = "",
+        parent: QWidget | None = None,
+        translations: "TranslationManager | None" = None,
     ) -> None:
         """Initialize the ChartPanel instance."""
         super().__init__(parent)
+        self._translations = translations
         self.setObjectName("Card")
         self._title = title
         self._subtitle = subtitle
@@ -85,6 +93,12 @@ class ChartPanel(QFrame):
         layout.addWidget(self.subtitle_label)
         self.canvas = MplCanvas(self)
         layout.addWidget(self.canvas, 1)
+
+    def _tr(self, text: str) -> str:
+        """Translate chart text through the active catalog."""
+        if self._translations is None:
+            return text
+        return self._translations.tr(text)
 
     def set_tokens(self, tokens: dict[str, str]) -> None:
         """Store the current theme colors used by the next draw."""
@@ -121,9 +135,9 @@ class ChartPanel(QFrame):
         accent: str | None = None,
         unit: str = "NVC",
     ) -> None:
-        """Draw a filled balance line with a subtle area gradient."""
+        """Draw a filled balance line with a subtle area tint."""
         if not values:
-            self.show_message("Недостаточно данных для графика")
+            self.show_message(self._tr("Недостаточно данных для графика"))
             return
         accent = accent or self._tokens.get("accent", "#FF8A3D")
         self.canvas.clear()
@@ -150,7 +164,7 @@ class ChartPanel(QFrame):
     ) -> None:
         """Draw stacked bars for incoming and outgoing volume."""
         if not labels:
-            self.show_message("Нет операций за выбранный период")
+            self.show_message(self._tr("Нет операций за выбранный период"))
             return
         self.canvas.clear()
         axes = self.canvas.axes
@@ -161,14 +175,14 @@ class ChartPanel(QFrame):
             received,
             color=self._tokens.get("positive", "#4ED19E"),
             width=0.62,
-            label="Получено",
+            label=self._tr("Получено"),
         )
         axes.bar(
             x,
             negative_sent,
             color=self._tokens.get("negative", "#FF6B7A"),
             width=0.62,
-            label="Отправлено",
+            label=self._tr("Отправлено"),
         )
         axes.axhline(0, color=self._grid_color(), linewidth=0.8)
         self._style_axes(axes)
@@ -197,9 +211,9 @@ class ChartPanel(QFrame):
         center_value: str = "",
     ) -> None:
         """Draw a donut chart for balance composition."""
-        visible = [(label, value) for label, value in items if value > 0]
+        visible = [(self._tr(label), value) for label, value in items if value > 0]
         if not visible:
-            self.show_message("Нет средств для распределения")
+            self.show_message(self._tr("Нет средств для распределения"))
             return
         self.canvas.clear()
         axes = self.canvas.axes
@@ -214,7 +228,7 @@ class ChartPanel(QFrame):
         axes.text(
             0,
             0.1,
-            center_title,
+            self._tr(center_title),
             ha="center",
             va="center",
             color=self._muted_color(),
@@ -252,9 +266,9 @@ class ChartPanel(QFrame):
         accent: str | None = None,
     ) -> None:
         """Draw a horizontal bar chart for the busiest addresses."""
-        visible = [(label, value) for label, value in items if value > 0]
+        visible = [(self._tr(label), value) for label, value in items if value > 0]
         if not visible:
-            self.show_message("Недостаточно данных по адресам")
+            self.show_message(self._tr("Недостаточно данных по адресам"))
             return
         accent = accent or self._tokens.get("accent", "#FF8A3D")
         self.canvas.clear()
@@ -270,24 +284,6 @@ class ChartPanel(QFrame):
             lambda value, _pos: format_amount(value, trim=True)
         )
         self._style_axes(axes, grid_axis="x")
-        self.canvas.figure.tight_layout(pad=0.6)
-        self.canvas.draw_idle()
-
-    def plot_fees(self, labels: Sequence[str], values: Sequence[float]) -> None:
-        """Draw a compact fee trend line."""
-        if not values:
-            self.show_message("Комиссии не начислялись")
-            return
-        self.canvas.clear()
-        axes = self.canvas.axes
-        x = list(range(len(values)))
-        color = self._tokens.get("warning", "#F3C969")
-        axes.bar(x, values, color=color, width=0.62, alpha=0.85)
-        self._style_axes(axes)
-        self._set_x_labels(axes, labels)
-        axes.yaxis.set_major_formatter(
-            lambda value, _pos: format_amount(value, trim=True)
-        )
         self.canvas.figure.tight_layout(pad=0.6)
         self.canvas.draw_idle()
 
@@ -355,7 +351,7 @@ class Sparkline(QWidget):
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 - Qt API
-        """Draw a smooth line with a soft gradient fill."""
+        """Draw a smooth line with a flat translucent fill."""
         if len(self._values) < 2:
             return
         painter = QPainter(self)
@@ -379,14 +375,9 @@ class Sparkline(QWidget):
         fill.lineTo(points[-1].x(), rect.bottom())
         fill.lineTo(points[0].x(), rect.bottom())
         fill.closeSubpath()
-        gradient = QLinearGradient(0, rect.top(), 0, rect.bottom())
-        top = QColor(self._color)
-        top.setAlpha(70)
-        bottom = QColor(self._color)
-        bottom.setAlpha(0)
-        gradient.setColorAt(0.0, top)
-        gradient.setColorAt(1.0, bottom)
-        painter.fillPath(fill, gradient)
+        area = QColor(self._color)
+        area.setAlpha(38)
+        painter.fillPath(fill, area)
         painter.setPen(QPen(self._color, 1.8))
         painter.drawPath(path)
         painter.end()

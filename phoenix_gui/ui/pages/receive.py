@@ -191,7 +191,7 @@ class ReceivePage(ScrollPage):
                 ),
                 Column(
                     "Операции",
-                    100,
+                    150,
                     Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 ),
                 Column("Первый контакт", 140),
@@ -214,6 +214,12 @@ class ReceivePage(ScrollPage):
         self.footer.setObjectName("HintText")
         self.footer.setWordWrap(True)
         card.add(self.footer)
+        self.protect(
+            self.balance_row.value_label,
+            self.utxo_row.value_label,
+            self.tx_row.value_label,
+            self.table.viewport(),
+        )
         return card
 
     def refresh(self) -> None:
@@ -253,9 +259,8 @@ class ReceivePage(ScrollPage):
                 tooltip=item.address,
                 font_family=self.themes.mono_family,
             )
-            account_cell = text_item(
-                item.account or "Основной", sort_key=item.account or "Основной"
-            )
+            account_name = item.account or "Основной"
+            account_cell = text_item(self.tr_text(account_name), sort_key=account_name)
             balance_cell = SortItem(f"{format_nvc(item.balance)}", item.balance)
             balance_cell.setTextAlignment(
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
