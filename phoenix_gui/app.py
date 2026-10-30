@@ -13,6 +13,7 @@ from PyQt6.QtGui import QGuiApplication
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from . import __app_name__, __version__
+from .core.bootstrap import ensure_runtime_config
 from .core.config import load_project_config
 from .demo import DemoService
 from .rpc.client import RPCClient
@@ -138,6 +139,12 @@ def main(argv: list[str] | None = None) -> int:
     install_exception_hook()
 
     project = load_project_config(args.project)
+    if not args.demo:
+        bootstrap_error = ensure_runtime_config(project)
+        if bootstrap_error:
+            LOGGER.warning("Runtime bootstrap: %s", bootstrap_error)
+        else:
+            project = load_project_config(args.project)
     settings = Settings()
     if args.reset_settings:
         settings.reset()

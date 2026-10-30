@@ -9,6 +9,7 @@ from PyQt6.QtGui import QAction, QCloseEvent, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QButtonGroup,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -24,6 +25,7 @@ from PyQt6.QtWidgets import (
 from .. import __version__
 from ..core.config import ProjectConfig
 from ..core.daemon import STATE_RUNNING, DaemonProcess
+from ..core.proxy import ProxyProcess
 from ..core.errors import humanize_error
 from ..core.formatting import format_int, format_percent
 from ..core.media import MediaBackdrop
@@ -33,7 +35,9 @@ from ..i18n import SOURCE_LANGUAGE, TranslationManager
 from ..rpc.client import RPCClient
 from ..rpc.service import WalletService
 from ..settings import Settings
+from .dialogs.migration import MigrationDialog
 from .dialogs.shortcuts import ShortcutsDialog
+from .dialogs.wallet_password import WalletPasswordDialog
 from .dialogs.tx_details import TxDetailsDialog
 from .pages.analytics import AnalyticsPage
 from .pages.base import PageContext
@@ -114,6 +118,8 @@ class MainWindow(QMainWindow):
         self._busy_count = 0
         self._really_quit = False
         self._daemon: DaemonProcess | None = None
+        self._proxy: ProxyProcess | None = None
+        self._wallet_password = ""
         self._sync: SyncStatus | None = None
         self._pages: dict[str, Any] = {}
         self._sounds = SoundPlayer(settings, self)
@@ -125,6 +131,7 @@ class MainWindow(QMainWindow):
         self._build_shell()
         self._build_pages()
         self._build_daemon()
+        self._build_proxy()
         self._bind_shortcuts()
         if self.translations.language != SOURCE_LANGUAGE:
             self.translations.translate_tree(self)
@@ -134,8 +141,9 @@ class MainWindow(QMainWindow):
         self._on_theme_changed(self.themes.theme)
         self._start_translation_timer()
         self._restore_geometry()
-        QTimer.singleShot(250, self._check_connection)
+        QTimer.singleShot(250, self._initial_connection_check)
         QTimer.singleShot(400, self._maybe_start_daemon)
+        QTimer.singleShot(1800, self._maybe_start_proxy)
 
     # ------------------------------------------------------------------
     # Language
@@ -255,6 +263,9 @@ class MainWindow(QMainWindow):
         self.daemon_pill = Pill("Демон не запущен", "neutral")
         self.daemon_pill.setToolTip("Состояние процесса novacoind")
         layout.addWidget(self.daemon_pill, 0, Qt.AlignmentFlag.AlignLeft)
+        self.proxy_pill = Pill("Прокси не запущен", "neutral")
+        self.proxy_pill.setToolTip("Состояние локального HTTP-прокси")
+        layout.addWidget(self.proxy_pill, 0, Qt.AlignmentFlag.AlignLeft)
         self.version_label = QLabel(f"Версия {__version__}")
         self.version_label.setObjectName("Faint")
         layout.addWidget(self.version_label)
@@ -390,11 +401,30 @@ class MainWindow(QMainWindow):
         settings_page = self._pages["settings"]
         settings_page.connectionChanged.connect(self._on_connection_settings)
         settings_page.daemonRestartRequested.connect(self._restart_daemon)
+        settings_page.proxyStartRequested.connect(self._start_proxy)
+        settings_page.proxyStopRequested.connect(self._stop_proxy)
+        settings_page.proxyRestartRequested.connect(self._restart_proxy)
+        settings_page.migrationRequested.connect(self._open_migration)
         self.navigate(
             self.settings.last_page
             if self.settings.last_page in self._pages
             else "overview"
         )
+
+    def _build_proxy(self) -> None:
+        """Create the owned local proxy process controller."""
+        if self.demo:
+            self.proxy_pill.setVisible(False)
+            self._pages["settings"].set_proxy_status(
+                "Демо-режим: прокси не запускается",
+                self.themes.tokens.get("accent", "#FF8A3D"),
+            )
+            return
+        self._proxy = ProxyProcess(self.settings, self.project, self)
+        self._proxy.stateChanged.connect(self._on_proxy_state)
+        self._proxy.ready.connect(self._on_proxy_ready)
+        self._proxy.failed.connect(self._on_proxy_failed)
+        self._proxy.stopped.connect(lambda _code: self._check_connection())
 
     def _build_daemon(self) -> None:
         """Create the owned daemon process controller."""
@@ -463,6 +493,17 @@ class MainWindow(QMainWindow):
             return "Демо-сеть"
         return "Тестовая сеть" if self.project.testnet else "Основная сеть"
 
+    def _initial_connection_check(self) -> None:
+        """Check an existing proxy before autostart has had time to run."""
+        if (
+            self._proxy is not None
+            and self.settings.proxy_autostart
+            and not self._proxy.port_open()
+        ):
+            self.footer_status.setText("Запуск локального прокси...")
+            return
+        self._check_connection()
+
     def _check_connection(self, manual: bool = False) -> None:
         """Probe the local proxy without blocking the interface."""
         if self.demo:
@@ -483,6 +524,10 @@ class MainWindow(QMainWindow):
                 page.activate()
             return
         if self._checking:
+            return
+        if self.service is None:
+            self._checking = False
+            self.footer_status.setText("Ожидание прокси...")
             return
         self._checking = True
         if manual:
@@ -695,6 +740,128 @@ class MainWindow(QMainWindow):
                 "error",
             )
 
+    def _wallet_file(self) -> Any:
+        """Return the encrypted key-store path for this checkout."""
+        return self.project.root / "keypair.bin"
+
+    def _ensure_wallet_password(self) -> bool:
+        """Prompt once per session for the key-store password."""
+        if self._wallet_password:
+            return True
+        create = not self._wallet_file().is_file()
+        dialog = WalletPasswordDialog(create=create, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        self._wallet_password = dialog.password_value()
+        return bool(self._wallet_password)
+
+    def _start_proxy(self, manual: bool = True) -> None:
+        """Start the local proxy from the GUI, asking for its password."""
+        if self.demo or self._proxy is None:
+            if manual:
+                self.toast.info("В демо-режиме прокси не запускается")
+            return
+        if self._proxy.state in {"starting", "running"}:
+            if manual:
+                self.toast.info("Прокси уже запущен")
+            return
+        if self._proxy.port_open() and not self._proxy.owned:
+            self._proxy.start()
+            if manual:
+                self.toast.info("Подключение к уже запущенному прокси")
+            return
+        if not self._ensure_wallet_password():
+            self._pages["settings"].set_proxy_status("Запуск отменен")
+            return
+        self._proxy.start(self._wallet_password)
+        if manual:
+            self.toast.info("Запуск локального прокси...")
+
+    def _maybe_start_proxy(self) -> None:
+        """Autostart the proxy after the daemon has been launched."""
+        if self.demo or self._proxy is None:
+            return
+        if self.settings.proxy_autostart:
+            self._start_proxy(manual=False)
+        else:
+            self.proxy_pill.set_text("Прокси не запущен")
+            self.proxy_pill.set_level("neutral")
+
+    def _stop_proxy(self) -> None:
+        """Stop an owned proxy; external proxies are left untouched."""
+        if self._proxy is None:
+            return
+        if not self._proxy.owned:
+            self.toast.info("Внешний прокси не останавливается")
+            return
+        self._proxy.stop()
+        self.toast.info("Остановка прокси...")
+
+    def _restart_proxy(self) -> None:
+        """Restart the local proxy and ask for the password again if needed."""
+        if self._proxy is None:
+            return
+        if not self._proxy.owned and not self._proxy.port_open():
+            self._start_proxy()
+            return
+        if not self._wallet_password:
+            if not self._ensure_wallet_password():
+                return
+        self._proxy.restart(self._wallet_password)
+        self.toast.info("Перезапуск прокси...")
+
+    def _on_proxy_state(self, state: str) -> None:
+        """Mirror proxy lifecycle in the sidebar and settings page."""
+        mapping = {
+            "stopped": ("Прокси остановлен", "neutral"),
+            "starting": ("Запуск прокси", "warning"),
+            "running": ("Прокси работает", "success"),
+            "stopping": ("Остановка прокси", "warning"),
+            "missing": ("Прокси не найден", "danger"),
+            "failed": ("Ошибка прокси", "danger"),
+        }
+        text, level = mapping.get(state, (state, "neutral"))
+        self.proxy_pill.set_text(text)
+        self.proxy_pill.set_level(level)
+        color = self.themes.tokens.get(
+            {"success": "positive", "warning": "warning", "danger": "negative"}.get(
+                level, "muted"
+            ),
+            "#A7B1C2",
+        )
+        self._pages["settings"].set_proxy_status(text, color)
+
+    def _on_proxy_ready(self, external: bool) -> None:
+        """Reconnect all pages once the proxy endpoint answers."""
+        self.proxy_pill.setToolTip(
+            "Внешний прокси" if external else "Прокси запущен этим окном"
+        )
+        self._rebuild_service()
+        self._online = False
+        self._check_connection(manual=True)
+
+    def _on_proxy_failed(self, message: str) -> None:
+        """Report proxy failures and allow a password retry."""
+        # Only forget the key-store password when authentication failed.
+        if any(
+            token in message.lower()
+            for token in ("парол", "password", "mac check", "хранилищ")
+        ):
+            self._wallet_password = ""
+        self.toast.error(message, title="Прокси")
+        self.proxy_pill.set_text("Ошибка прокси")
+        self.proxy_pill.set_level("danger")
+        self.proxy_pill.setToolTip(message)
+        self._pages["settings"].set_proxy_status(
+            "Ошибка прокси", self.themes.tokens.get("negative", "#FF7070")
+        )
+        if not self._online:
+            self._show_banner(
+                "Локальный прокси не запущен. Запустите его в настройках "
+                f"или проверьте пароль. {message}",
+                "error",
+            )
+
     def _restart_daemon(self) -> None:
         """Restart the owned daemon from the settings page."""
         if self._daemon is None:
@@ -728,6 +895,34 @@ class MainWindow(QMainWindow):
         else:
             self.header_spinner.stop()
             self.footer_spinner.stop()
+
+    def _open_migration(self) -> None:
+        """Open the guided wallet migration assistant."""
+        if self.demo:
+            self.toast.info("В демо-режиме перенос кошелька недоступен")
+            return
+        receive = self._pages.get("receive")
+        destination = getattr(receive, "_current_address", "") if receive else ""
+        dialog = MigrationDialog(
+            self.project,
+            self.settings,
+            dict(self.themes.tokens),
+            destination=destination,
+            parent=self,
+        )
+        dialog.completed.connect(self._on_migration_completed)
+        dialog.exec()
+
+    def _on_migration_completed(self) -> None:
+        """Refresh wallet views after a successful legacy sweep."""
+        for page_id in ("overview", "transactions", "receive", "coins"):
+            page = self._pages.get(page_id)
+            if page is not None:
+                page.mark_stale()
+        current = self.current_page
+        if current is not None:
+            current.refresh()
+        self.toast.success("Средства перенесены. Проверьте историю операций.")
 
     def _open_transaction(self, transaction: object) -> None:
         """Open the transaction detail dialog."""
@@ -777,6 +972,8 @@ class MainWindow(QMainWindow):
                 current.refresh()
         elif key == "daemon/autostart" and self.settings.daemon_autostart:
             self._maybe_start_daemon()
+        elif key == "proxy/autostart" and self.settings.proxy_autostart:
+            self._maybe_start_proxy()
 
     def _periodic_refresh(self) -> None:
         """Refresh the active page and reconnect if needed."""
@@ -909,6 +1106,11 @@ class MainWindow(QMainWindow):
         """Save state and stop a daemon owned by this window."""
         self._save_geometry()
         self.closing.emit()
+        if self._proxy is not None:
+            try:
+                self._proxy.stop()
+            except RuntimeError:
+                pass
         if self._daemon is not None:
             try:
                 self._daemon.stop()

@@ -366,3 +366,13 @@ def test_developer_contact_links(window):
     assert all(
         button.toolTip() == button.property("url") for button in page.developer_buttons
     )
+
+
+def test_settings_exposes_legacy_wallet_migration(window):
+    """The settings page links to the migration wizard."""
+    window.navigate("settings")
+    page = window._pages["settings"]
+
+    assert page.migration_button.text() == "Открыть мастер переноса"
+    assert "wallet.dat" in page.migration_button.toolTip()
+    assert page.migrationRequested is not None

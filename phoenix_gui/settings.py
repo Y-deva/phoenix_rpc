@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
     "connection/proxy_password": "",
     "connection/timeout_seconds": 12,
     "daemon/autostart": True,
+    "proxy/autostart": True,
     "daemon/binary": "",
     "daemon/datadir": "",
     "daemon/extra_args": "",
@@ -224,6 +225,11 @@ class Settings(QObject):
             url = url or self._project.proxy_url
             user = user or self._project.proxy_user
             password = password or self._project.proxy_password
+            if not user and not password:
+                # The backend falls back to daemon credentials when [proxy]
+                # has no separate login, so the GUI must do the same.
+                user = self._project.daemon_user
+                password = self._project.daemon_password
         return url or "http://127.0.0.1:16666", user, password
 
     # Appearance -----------------------------------------------------
@@ -411,6 +417,16 @@ class Settings(QObject):
     def daemon_autostart(self, value: bool) -> None:
         """Set the daemon_autostart value."""
         self.set("daemon/autostart", value)
+
+    @property
+    def proxy_autostart(self) -> bool:
+        """Return whether the local HTTP proxy should be started."""
+        return bool(self.get("proxy/autostart"))
+
+    @proxy_autostart.setter
+    def proxy_autostart(self, value: bool) -> None:
+        """Set the proxy_autostart value."""
+        self.set("proxy/autostart", value)
 
     @property
     def daemon_binary(self) -> str:

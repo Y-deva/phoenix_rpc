@@ -1,8 +1,10 @@
 """Build novacoind from the bundled C++ sources.
 
-The GUI does not ship a prebuilt daemon.  This helper configures the CMake
-project in ``novacoin-master`` and copies the resulting binary to ``bin`` so
-that the normal GUI discovery order finds it on the next start.
+The GUI does not ship a prebuilt daemon.  This helper configures the
+standalone headless CMake project in ``novacoin-master/src`` and copies the
+resulting binary to ``bin`` so that the normal GUI discovery order finds it on
+the next start.  The headless project avoids the Qt5 build requirements of the
+full wallet build.
 """
 
 from __future__ import annotations
@@ -16,8 +18,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_SOURCE = ROOT / "novacoin-master"
-DEFAULT_BUILD = ROOT / "build" / "novacoin"
+DEFAULT_SOURCE = ROOT / "novacoin-master" / "src"
+DEFAULT_BUILD = ROOT / "build" / "novacoind"
 DEFAULT_OUTPUT = ROOT / "bin"
 
 
@@ -61,6 +63,31 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def detect_cmake_args(root: Path) -> list[str]:
+    """Add local library and Berkeley DB hints for common Linux layouts."""
+    args: list[str] = []
+    liboqs_root = Path(os.environ.get("LIBOQS_DIR", root / ".deps" / "liboqs"))
+    liboqs_config = liboqs_root / "lib" / "cmake" / "liboqs"
+    if liboqs_config.is_dir():
+        args.append(f"-Dliboqs_DIR={liboqs_config}")
+    for include_dir in (Path("/usr/include/db5.3"), Path("/usr/include")):
+        if (include_dir / "db_cxx.h").is_file():
+            args.append(f"-DBerkeleyDB_INC={include_dir}")
+            break
+    for lib_dir in (Path("/usr/lib"), Path("/usr/lib64")):
+        candidates = sorted(lib_dir.glob("libdb_cxx-*.so"))
+        if candidates:
+            library = max(candidates, key=lambda path: len(path.name))
+            args.extend(
+                [
+                    f"-DBerkeleyDB_LIBS={lib_dir}",
+                    f"-DBerkeleyDB_LIB_name={library.stem}",
+                ]
+            )
+            break
+    return args
+
+
 def run(command: list[str], workdir: Path, dry_run: bool) -> None:
     """Run one build command, aborting on a non-zero exit code."""
     printable = " ".join(str(item) for item in command)
@@ -99,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
             str(build_dir),
             "-DCMAKE_BUILD_TYPE=Release",
             "-DWITH_TOOLS=NO",
+            *detect_cmake_args(ROOT),
         ],
         ROOT,
         args.dry_run,
@@ -118,6 +146,8 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     candidates = (
+        build_dir / "novacoind",
+        build_dir / "novacoind.exe",
         build_dir / "src" / "novacoind",
         build_dir / "src" / "novacoind.exe",
     )

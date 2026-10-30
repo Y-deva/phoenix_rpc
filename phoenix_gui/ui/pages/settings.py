@@ -64,6 +64,8 @@ VERBOSITY_HINTS = {
 class SettingsPage(ScrollPage):
     """Configure appearance, background media, daemon and connection."""
 
+    migrationRequested = pyqtSignal()
+
     page_id = "settings"
     page_title = "Настройки"
     page_subtitle = "Внешний вид, безопасность и параметры подключения"
@@ -71,6 +73,9 @@ class SettingsPage(ScrollPage):
 
     connectionChanged = pyqtSignal()
     daemonRestartRequested = pyqtSignal()
+    proxyStartRequested = pyqtSignal()
+    proxyStopRequested = pyqtSignal()
+    proxyRestartRequested = pyqtSignal()
 
     def __init__(self, context: Any, parent: QWidget | None = None) -> None:
         """Initialize the SettingsPage instance."""
@@ -95,6 +100,7 @@ class SettingsPage(ScrollPage):
         self._build_sound()
         self._build_connection()
         self._build_daemon()
+        self._build_migration()
         self._build_developers()
         self._build_about()
         self.add_stretch()
@@ -550,6 +556,43 @@ class SettingsPage(ScrollPage):
         test_row.addWidget(self.test_button)
         form.addRow("Проверка", test_row)
 
+        self.proxy_status = QLabel("Прокси не запущен")
+        self.proxy_status.setObjectName("Muted")
+        form.addRow("Прокси", self.proxy_status)
+        self.proxy_autostart_box = QCheckBox("Запускать прокси при старте GUI")
+        self.proxy_autostart_box.setToolTip(
+            "Пароль хранилища ключей будет запрошен в окне кошелька"
+        )
+        self.proxy_autostart_box.toggled.connect(
+            lambda checked: self.settings.set("proxy/autostart", checked)
+        )
+        form.addRow("Автозапуск", self.proxy_autostart_box)
+        proxy_row = QHBoxLayout()
+        self.proxy_start_button = QPushButton("Запустить")
+        self.proxy_start_button.setObjectName("GhostButton")
+        self.proxy_start_button.setToolTip("Запустить локальный прокси без терминала")
+        self.proxy_start_button.clicked.connect(self.proxyStartRequested.emit)
+        self.proxy_stop_button = QPushButton("Остановить")
+        self.proxy_stop_button.setObjectName("GhostButton")
+        self.proxy_stop_button.setToolTip("Остановить прокси, запущенный этим окном")
+        self.proxy_stop_button.clicked.connect(self.proxyStopRequested.emit)
+        self.proxy_restart_button = QPushButton("Перезапустить")
+        self.proxy_restart_button.setObjectName("GhostButton")
+        self.proxy_restart_button.setToolTip("Перезапустить локальный прокси")
+        self.proxy_restart_button.clicked.connect(self.proxyRestartRequested.emit)
+        proxy_row.addStretch(1)
+        proxy_row.addWidget(self.proxy_start_button)
+        proxy_row.addWidget(self.proxy_stop_button)
+        proxy_row.addWidget(self.proxy_restart_button)
+        form.addRow("", proxy_row)
+        proxy_hint = QLabel(
+            "Пароль хранилища ключей вводится в диалоге Phoenix. "
+            "Консоль и отдельный терминал не нужны."
+        )
+        proxy_hint.setObjectName("HintText")
+        proxy_hint.setWordWrap(True)
+        form.addRow("", proxy_hint)
+
     def _build_daemon(self) -> None:
         """Autostart, binary location and daemon arguments."""
         card, form = self._section(
@@ -609,12 +652,59 @@ class SettingsPage(ScrollPage):
         daemon_row.addWidget(self.restart_daemon_button)
         form.addRow("", daemon_row)
         hint = QLabel(
-            "Прокси запускается отдельно: он запрашивает пароль хранилища ключей "
-            "в терминале."
+            "Прокси запускается из окна кошелька; пароль хранилища ключей "
+            "запрашивается один раз в диалоге."
         )
         hint.setObjectName("HintText")
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+    def set_proxy_status(self, text: str, color: str | None = None) -> None:
+        """Show the local proxy lifecycle on the settings page."""
+        self.proxy_status.setText(text)
+        if color:
+            self.proxy_status.setStyleSheet(f"color: {color};")
+        else:
+            self.proxy_status.setStyleSheet("")
+
+    def _build_migration(self) -> None:
+        """Offer a guided transfer of an old wallet without console commands."""
+        card = Card()
+        card.add(
+            SectionHeader(
+                "Перенос старого кошелька",
+                "Помощник импортирует ключи из wallet.dat или WIF "
+                "в локальный резервный кошелек и отправит средства на адрес Phoenix.",
+            )
+        )
+        body = QLabel(
+            "Старый формат ключей несовместим с Falcon-ключами Phoenix, "
+            "поэтому средства переводятся на новый адрес. Оригинальный "
+            "wallet.dat не изменяется. Мастер работает через локальный "
+            "novacoind и не запрашивает пароль в терминале."
+        )
+        body.setObjectName("HintText")
+        body.setWordWrap(True)
+        card.add(body)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(12)
+        note = QLabel(
+            "Сделайте резервную копию keypair.bin и wallet.dat перед переносом."
+        )
+        note.setObjectName("Faint")
+        note.setWordWrap(True)
+        row.addWidget(note, 1)
+        self.migration_button = QPushButton("Открыть мастер переноса")
+        self.migration_button.setObjectName("AccentButton")
+        self.migration_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.migration_button.setToolTip(
+            "Импорт WIF или wallet.dat с автоматическим переводом средств"
+        )
+        self.migration_button.clicked.connect(self.migrationRequested.emit)
+        row.addWidget(self.migration_button)
+        card.add_layout(row)
+        self.body.addWidget(card)
 
     def _build_developers(self) -> None:
         """Repository and developer contact links."""
@@ -755,6 +845,7 @@ class SettingsPage(ScrollPage):
             self.timeout_spin.setValue(self.settings.timeout_seconds)
 
             self.autostart_box.setChecked(self.settings.daemon_autostart)
+            self.proxy_autostart_box.setChecked(self.settings.proxy_autostart)
             self.binary_field.set_path(self.settings.daemon_binary)
             self.datadir_field.set_path(self.settings.daemon_datadir)
             self.args_edit.setText(self.settings.daemon_extra_args)
