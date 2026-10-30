@@ -1,4 +1,5 @@
 import os
+import sys
 import struct
 import hashlib
 import hmac
@@ -7,6 +8,7 @@ import gostcrypto
 import oqs
 
 KEYPAIR_FILE = "keypair.bin"
+PASSWORD_ENV = "PHOENIX_WALLET_PASSWORD"
 MAGIC = b"S58"
 MAGIC_LEN = len(MAGIC)
 VERSION = 1
@@ -160,7 +162,21 @@ def get_master_key() -> bytes:
         )
     return _master_key
 
+def _environment_password() -> str | None:
+    """Pop the one-shot wallet password supplied by the GUI process."""
+    value = os.environ.pop(PASSWORD_ENV, None)
+    return value or None
+
+
 def get_or_create_keypair(password: str = None):
+    """Load the Falcon keypair, creating it on the first run."""
+    if password is None:
+        password = _environment_password()
+    if password is None and not sys.stdin.isatty():
+        raise RuntimeError(
+            "Пароль хранилища ключей не передан. Запускайте прокси из GUI "
+            "или передайте PHOENIX_WALLET_PASSWORD."
+        )
     if os.path.exists(KEYPAIR_FILE):
         if password is None:
             password = getpass.getpass("Wallet password: ")

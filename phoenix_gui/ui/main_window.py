@@ -32,9 +32,10 @@ from ..core.media import MediaBackdrop
 from ..core.sounds import SoundPlayer
 from ..core.sync import SyncStatus, build_sync_status, load_parser_progress
 from ..i18n import SOURCE_LANGUAGE, TranslationManager
-from ..rpc.client import RPCClient
+from ..rpc.client import RPCClient, RPCConnectionError
 from ..rpc.service import WalletService
 from ..settings import Settings
+from .dialogs.connection import ConnectionDialog
 from .dialogs.migration import MigrationDialog
 from .dialogs.shortcuts import ShortcutsDialog
 from .dialogs.wallet_password import WalletPasswordDialog
@@ -119,6 +120,7 @@ class MainWindow(QMainWindow):
         self._really_quit = False
         self._daemon: DaemonProcess | None = None
         self._proxy: ProxyProcess | None = None
+        self._connection_dialog: ConnectionDialog | None = None
         self._wallet_password = ""
         self._sync: SyncStatus | None = None
         self._pages: dict[str, Any] = {}
@@ -261,10 +263,18 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
 
         self.daemon_pill = Pill("Демон не запущен", "neutral")
-        self.daemon_pill.setToolTip("Состояние процесса novacoind")
+        self.daemon_pill.setToolTip(
+            "Нажмите, чтобы открыть управление серверами и диагностику"
+        )
+        self.daemon_pill.set_clickable(True)
+        self.daemon_pill.clicked.connect(self.open_connection_dialog)
         layout.addWidget(self.daemon_pill, 0, Qt.AlignmentFlag.AlignLeft)
         self.proxy_pill = Pill("Прокси не запущен", "neutral")
-        self.proxy_pill.setToolTip("Состояние локального HTTP-прокси")
+        self.proxy_pill.setToolTip(
+            "Нажмите, чтобы запустить прокси, перезапустить или посмотреть журнал"
+        )
+        self.proxy_pill.set_clickable(True)
+        self.proxy_pill.clicked.connect(self.open_connection_dialog)
         layout.addWidget(self.proxy_pill, 0, Qt.AlignmentFlag.AlignLeft)
         self.version_label = QLabel(f"Версия {__version__}")
         self.version_label.setObjectName("Faint")
@@ -329,6 +339,13 @@ class MainWindow(QMainWindow):
         self.theme_button.setFixedSize(34, 34)
         self.theme_button.setToolTip("Переключить темную и светлую тему (Ctrl+Shift+T)")
         self.theme_button.clicked.connect(self.themes.toggle_light)
+        self.servers_button = QPushButton()
+        self.servers_button.setObjectName("IconButton")
+        self.servers_button.setFixedSize(34, 34)
+        self.servers_button.setToolTip(
+            "Серверы и подключение: запуск, диагностика (Ctrl+Shift+S)"
+        )
+        self.servers_button.clicked.connect(self.open_connection_dialog)
         self.settings_button = QPushButton()
         self.settings_button.setObjectName("IconButton")
         self.settings_button.setFixedSize(34, 34)
@@ -336,6 +353,7 @@ class MainWindow(QMainWindow):
         self.settings_button.clicked.connect(lambda: self.navigate("settings"))
         layout.addWidget(self.refresh_button)
         layout.addWidget(self.theme_button)
+        layout.addWidget(self.servers_button)
         layout.addWidget(self.settings_button)
         return header
 
@@ -354,6 +372,14 @@ class MainWindow(QMainWindow):
         self.banner_label.setObjectName("Muted")
         layout.addWidget(self.banner_icon)
         layout.addWidget(self.banner_label, 1)
+        self.banner_start = QPushButton("Запустить прокси")
+        self.banner_start.setObjectName("AccentButton")
+        self.banner_start.setToolTip("Запустить локальный прокси без терминала")
+        self.banner_start.clicked.connect(lambda: self._start_proxy(True))
+        self.banner_servers = QPushButton("Серверы")
+        self.banner_servers.setObjectName("GhostButton")
+        self.banner_servers.setToolTip("Открыть управление серверами и журналом")
+        self.banner_servers.clicked.connect(self.open_connection_dialog)
         self.retry_button = QPushButton("Повторить")
         self.retry_button.setObjectName("GhostButton")
         self.retry_button.setToolTip("Повторить проверку прокси")
@@ -362,6 +388,8 @@ class MainWindow(QMainWindow):
         self.banner_settings.setObjectName("GhostButton")
         self.banner_settings.setToolTip("Открыть параметры подключения")
         self.banner_settings.clicked.connect(lambda: self.navigate("settings"))
+        layout.addWidget(self.banner_start)
+        layout.addWidget(self.banner_servers)
         layout.addWidget(self.retry_button)
         layout.addWidget(self.banner_settings)
         return self.banner
@@ -404,12 +432,73 @@ class MainWindow(QMainWindow):
         settings_page.proxyStartRequested.connect(self._start_proxy)
         settings_page.proxyStopRequested.connect(self._stop_proxy)
         settings_page.proxyRestartRequested.connect(self._restart_proxy)
+        settings_page.diagnosticsRequested.connect(self.open_connection_dialog)
         settings_page.migrationRequested.connect(self._open_migration)
         self.navigate(
             self.settings.last_page
             if self.settings.last_page in self._pages
             else "overview"
         )
+
+    # ------------------------------------------------------------------
+    # Backend control center
+    # ------------------------------------------------------------------
+    @property
+    def daemon_process(self) -> DaemonProcess | None:
+        """Return the daemon controller used by this window."""
+        return self._daemon
+
+    @property
+    def proxy_process(self) -> ProxyProcess | None:
+        """Return the proxy controller used by this window."""
+        return self._proxy
+
+    def open_connection_dialog(self) -> None:
+        """Open the non-modal server control center."""
+        if self._connection_dialog is None:
+            self._connection_dialog = ConnectionDialog(self, self)
+        if self.translations.language != SOURCE_LANGUAGE:
+            self.translations.translate_tree(self._connection_dialog)
+        self._connection_dialog.show()
+        self._connection_dialog.raise_()
+        self._connection_dialog.activateWindow()
+
+    def start_daemon_backend(self) -> None:
+        """Start the daemon from the control center."""
+        if self.demo or self._daemon is None:
+            self.toast.info("В демо-режиме демон не запускается")
+            return
+        self._daemon.start()
+
+    def restart_daemon_backend(self) -> None:
+        """Restart the daemon from the control center."""
+        self._restart_daemon()
+
+    def start_proxy_backend(self) -> None:
+        """Start the proxy from the control center."""
+        self._start_proxy(manual=True)
+
+    def stop_proxy_backend(self) -> None:
+        """Stop the proxy from the control center."""
+        self._stop_proxy()
+
+    def restart_proxy_backend(self) -> None:
+        """Restart the proxy from the control center."""
+        self._restart_proxy()
+
+    def check_connection_now(self) -> None:
+        """Repeat the RPC health check immediately."""
+        self._check_connection(manual=True)
+
+    def start_all_backends(self) -> None:
+        """Start both services in order, asking for the wallet password once."""
+        if self.demo:
+            self.toast.info("В демо-режиме серверные процессы не нужны")
+            return
+        if self._daemon is not None:
+            self._daemon.start()
+        if self._proxy is not None:
+            QTimer.singleShot(700, lambda: self._start_proxy(manual=True))
 
     def _build_proxy(self) -> None:
         """Create the owned local proxy process controller."""
@@ -471,6 +560,11 @@ class MainWindow(QMainWindow):
             self.translations.translate_tree(self)
             if page_id != "settings":
                 page.refresh()
+
+    @property
+    def online(self) -> bool:
+        """Return whether the last RPC health check succeeded."""
+        return self._online
 
     @property
     def current_page(self) -> Any:
@@ -555,16 +649,33 @@ class MainWindow(QMainWindow):
         self._online = True
         self._sync = status
         self.banner.setVisible(False)
-        self.network_pill.set_text("В сети")
+        self.network_pill.set_text(self.translations.tr("В сети"))
         self.network_pill.set_level("success")
-        network_label = "Тестовая сеть" if status.network.testnet else "Основная сеть"
+        if (
+            not self.demo
+            and self._daemon is not None
+            and self._daemon.state != "running"
+        ):
+            self.daemon_pill.set_text(self.translations.tr("Демон подключен"))
+            self.daemon_pill.set_level("success")
+            self.daemon_pill.setToolTip(
+                self.translations.tr(
+                    "Локальный демон отвечает по RPC; процесс запущен вне этого окна."
+                )
+            )
+        network_label = self.translations.tr(
+            "Тестовая сеть" if status.network.testnet else "Основная сеть"
+        )
         self.network_pill.setToolTip(
             f"{network_label}, блок {format_int(status.network.blocks)}, "
             f"соединений {format_int(status.network.connections)}"
         )
         self.network_name.setText(network_label)
         self._apply_sync_status(status)
-        self.footer_status.setText("Готово")
+        self.footer_status.setText(self.translations.tr("Готово"))
+        clear_toasts = getattr(self.toast, "clear", None)
+        if clear_toasts is not None:
+            clear_toasts()
         if not was_online:
             page = self.current_page
             if page is not None and hasattr(page, "mark_stale"):
@@ -580,19 +691,32 @@ class MainWindow(QMainWindow):
     def _on_connection_error(self, error: object, manual: bool) -> None:
         """Show an offline banner with an actionable hint."""
         self._online = False
-        self.network_pill.set_text("Нет связи")
+        self.network_pill.set_text(self.translations.tr("Нет связи"))
         self.network_pill.set_level("danger")
         self.network_pill.setToolTip(humanize_error(error))
-        self.sync_pill.set_text("Синхронизация")
+        self.sync_pill.set_text(self.translations.tr("Синхронизация"))
         self.sync_pill.set_level("neutral")
-        self.footer_status.setText("Прокси недоступен")
         self.footer_sync.setText("")
         message = humanize_error(error)
-        self._show_banner(
-            "Нет связи с локальным прокси. Запустите python main.py в каталоге проекта "
-            f"или проверьте настройки. {message}",
-            "warning",
-        )
+        proxy = self._proxy
+        if (
+            isinstance(error, RPCConnectionError)
+            and proxy is not None
+            and proxy.state == "running"
+        ):
+            text = self.translations.tr(
+                "Прокси работает, но узел Novacoin не ответил. "
+                "Дождитесь синхронизации или проверьте журнал."
+            )
+            self.footer_status.setText(self.translations.tr("Узел не отвечает"))
+        elif proxy is not None and proxy.state == "starting":
+            text = "Локальный прокси запускается. Это занимает несколько секунд."
+            self.footer_status.setText(self.translations.tr("Прокси недоступен"))
+        else:
+            text = self.translations.tr(message)
+            self.footer_status.setText(self.translations.tr("Прокси недоступен"))
+        self._show_banner(text, "warning")
+        self.banner.setToolTip(message)
         if manual:
             self.toast.error(message, title="Подключение")
 
@@ -604,14 +728,18 @@ class MainWindow(QMainWindow):
         """Update header and footer with block and parser progress."""
         daemon_percent = float(status.daemon_percent)
         if status.fully_synced:
-            self.sync_pill.set_text("Синхронизировано")
+            self.sync_pill.set_text(self.translations.tr("Синхронизировано"))
             self.sync_pill.set_level("success")
         elif not status.daemon_synced:
-            self.sync_pill.set_text(f"Блоки {format_percent(daemon_percent / 100)}")
+            self.sync_pill.set_text(
+                f"{self.translations.tr('Блоки')} "
+                f"{format_percent(daemon_percent / 100)}"
+            )
             self.sync_pill.set_level("warning")
         else:
             self.sync_pill.set_text(
-                f"Парсер {format_percent(float(status.parser.percent) / 100)}"
+                f"{self.translations.tr('Парсер')} "
+                f"{format_percent(float(status.parser.percent) / 100)}"
             )
             self.sync_pill.set_level("warning")
         self.sync_pill.setToolTip(
@@ -621,7 +749,8 @@ class MainWindow(QMainWindow):
             f"{format_int(status.parser.last_known)}"
         )
         self.footer_sync.setText(
-            f"Блок {format_int(status.blocks)} / {format_int(status.headers)}"
+            f"{self.translations.tr('Блок')} {format_int(status.blocks)} / "
+            f"{format_int(status.headers)}"
         )
         self._update_parser_footer()
 
@@ -657,7 +786,20 @@ class MainWindow(QMainWindow):
         )
         self.banner_icon.setPixmap(pixmap)
         self.banner_label.setText(text)
+        self._sync_banner_actions()
         self.banner.setVisible(True)
+
+    def _sync_banner_actions(self) -> None:
+        """Show the proxy start action only when it can be useful."""
+        if not hasattr(self, "banner_start"):
+            return
+        proxy = self._proxy
+        can_start = (
+            not self.demo
+            and proxy is not None
+            and proxy.state not in {"starting", "running", "stopping"}
+        )
+        self.banner_start.setVisible(can_start)
 
     def _on_connection_settings(self) -> None:
         """Rebuild the RPC service after proxy credentials changed."""
@@ -704,6 +846,7 @@ class MainWindow(QMainWindow):
             "failed": ("Ошибка демона", "danger"),
         }
         text, level = mapping.get(state, (state, "neutral"))
+        text = self.translations.tr(text)
         self.daemon_pill.set_text(text)
         self.daemon_pill.set_level(level)
         color = self.themes.tokens.get(
@@ -783,7 +926,7 @@ class MainWindow(QMainWindow):
             return
         if self.settings.proxy_autostart:
             self._start_proxy(manual=False)
-        else:
+        elif self._proxy.state in {"stopped", "missing", "failed"}:
             self.proxy_pill.set_text("Прокси не запущен")
             self.proxy_pill.set_level("neutral")
 
@@ -821,8 +964,10 @@ class MainWindow(QMainWindow):
             "failed": ("Ошибка прокси", "danger"),
         }
         text, level = mapping.get(state, (state, "neutral"))
+        text = self.translations.tr(text)
         self.proxy_pill.set_text(text)
         self.proxy_pill.set_level(level)
+        self._sync_banner_actions()
         color = self.themes.tokens.get(
             {"success": "positive", "warning": "warning", "danger": "negative"}.get(
                 level, "muted"
@@ -834,7 +979,9 @@ class MainWindow(QMainWindow):
     def _on_proxy_ready(self, external: bool) -> None:
         """Reconnect all pages once the proxy endpoint answers."""
         self.proxy_pill.setToolTip(
-            "Внешний прокси" if external else "Прокси запущен этим окном"
+            self.translations.tr("Внешний прокси")
+            if external
+            else self.translations.tr("Прокси запущен этим окном")
         )
         self._rebuild_service()
         self._online = False
@@ -995,6 +1142,7 @@ class MainWindow(QMainWindow):
         self._shortcut("Ctrl+Q", self._quit)
         self._shortcut("Ctrl+Shift+T", self.themes.cycle)
         self._shortcut("Ctrl+,", lambda: self.navigate("settings"))
+        self._shortcut("Ctrl+Shift+S", self.open_connection_dialog)
         self._shortcut("F1", self._show_shortcuts)
 
     def _shortcut(self, sequence: str, callback: Any) -> QShortcut:
@@ -1019,6 +1167,7 @@ class MainWindow(QMainWindow):
         muted = theme.color("muted")
         self.refresh_button.setIcon(icon("refresh", muted, 18))
         self.theme_button.setIcon(icon("sun" if theme.dark else "moon", muted, 18))
+        self.servers_button.setIcon(icon("server", muted, 18))
         self.settings_button.setIcon(icon("settings", muted, 18))
         self.banner_icon.setPixmap(
             icon("warning", theme.color("warning"), 18).pixmap(18, 18)

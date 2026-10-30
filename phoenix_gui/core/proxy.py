@@ -9,14 +9,15 @@ answers, and stops the process again when the wallet closes.
 from __future__ import annotations
 
 import base64
-import json
+import http.client
 import os
+import re
+import threading
 import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
-from PyQt6.QtCore import QObject, QProcess, QTimer, QUrl, pyqtSignal
-from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
+from PyQt6.QtCore import QObject, QProcess, QTimer, pyqtSignal
 
 from .config import ProjectConfig
 from ..settings import Settings
@@ -57,6 +58,7 @@ class ProxyProcess(QObject):
     failed = pyqtSignal(str)
     stopped = pyqtSignal(int)
     output = pyqtSignal(str)
+    probe_result = pyqtSignal(bool, str, str)
 
     def __init__(
         self, settings: Settings, project: ProjectConfig, parent: QObject | None = None
@@ -80,8 +82,8 @@ class ProxyProcess(QObject):
         self._probe_timer = QTimer(self)
         self._probe_timer.setInterval(700)
         self._probe_timer.timeout.connect(self._probe)
-        self._network = QNetworkAccessManager(self)
-        self._reply: QNetworkReply | None = None
+        self._probe_thread: threading.Thread | None = None
+        self.probe_result.connect(self._on_probe_result)
 
     @property
     def state(self) -> str:
@@ -138,9 +140,14 @@ class ProxyProcess(QObject):
         if self._state in {STATE_STARTING, STATE_RUNNING, STATE_STOPPING}:
             return
         if self.port_open():
+            # A listening socket does not prove that the proxy is healthy.
+            # Probe the HTTP endpoint before attaching to a stale process.
             self._owned = False
-            self._set_state(STATE_RUNNING)
-            self.ready.emit(True)
+            self._buffer = ""
+            self._set_state(STATE_STARTING)
+            self._deadline.start(6000)
+            self._probe_timer.start()
+            QTimer.singleShot(80, self._probe)
             return
         python = backend_python(self._project)
         script = self._project.root / "main.py"
@@ -195,36 +202,68 @@ class ProxyProcess(QObject):
 
     def _probe(self) -> None:
         """Ask the proxy for getinfo until it answers or the deadline expires."""
-        if self._state != STATE_STARTING or self._reply is not None:
+        if self._state != STATE_STARTING or self._probe_thread is not None:
             return
         url, user, password = self._endpoint()
-        payload = json.dumps(
-            {"jsonrpc": "1.0", "id": 1, "method": "getinfo", "params": []}
-        ).encode("utf-8")
-        request = QNetworkRequest(QUrl(url))
-        request.setHeader(
-            QNetworkRequest.KnownHeaders.ContentTypeHeader, "application/json"
+        self._probe_thread = threading.Thread(
+            target=self._probe_worker,
+            args=(url, user, password),
+            daemon=True,
+            name="phoenix-proxy-probe",
         )
-        token = base64.b64encode(f"{user}:{password}".encode("utf-8"))
-        request.setRawHeader(b"Authorization", b"Basic " + token)
-        reply = self._network.post(request, payload)
-        self._reply = reply
-        reply.finished.connect(lambda: self._on_probe_reply(reply))
+        self._probe_thread.start()
 
-    def _on_probe_reply(self, reply: QNetworkReply) -> None:
-        """Handle one proxy readiness probe."""
-        self._reply = None
+    def _probe_worker(self, url: str, user: str, password: str) -> None:
+        """Perform one short HTTP probe without blocking the GUI thread."""
+        parsed = urlparse(url)
+        host = parsed.hostname or "127.0.0.1"
+        port = parsed.port or 16666
+        token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+        headers = {
+            "Authorization": f"Basic {token}",
+            "Connection": "close",
+        }
+        # The health route never touches the daemon, so a busy node cannot
+        # make a healthy proxy look broken.
+        connection = http.client.HTTPConnection(host, port, timeout=1.6)
         try:
-            error = reply.error()
-            if error == QNetworkReply.NetworkError.NoError:
-                self._probe_timer.stop()
-                self._deadline.stop()
-                self._set_state(STATE_RUNNING)
-                self.ready.emit(False)
+            connection.request("GET", "/health", headers=headers)
+            response = connection.getresponse()
+            response.read(256)
+            self._emit_probe(True, str(response.status))
+        except (OSError, http.client.HTTPException) as exc:
+            self._emit_probe(False, "", type(exc).__name__)
+        finally:
+            connection.close()
+
+    def _emit_probe(self, alive: bool, status: str, detail: str = "") -> None:
+        """Emit a probe result, tolerating a window closed mid-probe."""
+        try:
+            self.probe_result.emit(alive, status, detail)
         except RuntimeError:
             pass
-        finally:
-            reply.deleteLater()
+
+    def _on_probe_result(self, alive: bool, status: str, detail: str) -> None:
+        """Handle one finished proxy readiness probe on the GUI thread."""
+        self._probe_thread = None
+        if self._state != STATE_STARTING:
+            return
+        if alive and status == "401":
+            self._probe_timer.stop()
+            self._deadline.stop()
+            self._set_state(STATE_FAILED)
+            self.failed.emit(
+                "Прокси отклонил логин или пароль. Проверьте данные "
+                "подключения в настройках."
+            )
+        elif alive:
+            # Any HTTP response means the proxy is alive. A 5xx caused by
+            # the daemon is reported by the normal connection check.
+            self._probe_timer.stop()
+            self._deadline.stop()
+            self._set_state(STATE_RUNNING)
+            self.ready.emit(not self._owned)
+        # Connection refused/timeouts are retried until the deadline.
 
     def _on_timeout(self) -> None:
         """Report a proxy that did not start in time."""
@@ -233,16 +272,25 @@ class ProxyProcess(QObject):
             self._set_state(STATE_FAILED)
             tail = self._buffer.strip().splitlines()[-4:]
             detail = " | ".join(tail)
-            self.failed.emit(
-                "Прокси не ответил вовремя. Проверьте config.toml и пароль "
-                f"хранилища ключей. {detail}".strip()
-            )
+            if self._owned:
+                message = (
+                    "Прокси не ответил вовремя. Проверьте config.toml и пароль "
+                    f"хранилища ключей. {detail}"
+                )
+            else:
+                message = (
+                    "Порт прокси занят, но HTTP-прокси не отвечает. "
+                    "Закройте старый процесс прокси или перезапустите его. "
+                    f"{detail}"
+                )
+            self.failed.emit(message.strip())
 
     def _read_output(self) -> None:
         """Collect process output for diagnostics."""
         chunk = bytes(self._process.readAllStandardOutput()).decode("utf-8", "replace")
         if not chunk:
             return
+        chunk = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", chunk)
         self._buffer = (self._buffer + chunk)[-16000:]
         self.output.emit(chunk)
 
@@ -272,6 +320,14 @@ class ProxyProcess(QObject):
             return
         tail = self._buffer.strip().splitlines()[-5:]
         detail = " | ".join(tail)
-        if "Invalid password" in detail or "MAC check failed" in detail:
+        if any(
+            marker in detail
+            for marker in (
+                "Invalid password",
+                "MAC check failed",
+                "Wrong password",
+                "Wrong password or corrupted file",
+            )
+        ):
             detail = "Неверный пароль хранилища ключей."
         self.failed.emit(f"Прокси завершился с кодом {code}: {detail}")

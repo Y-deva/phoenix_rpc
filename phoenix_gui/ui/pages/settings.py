@@ -76,6 +76,7 @@ class SettingsPage(ScrollPage):
     proxyStartRequested = pyqtSignal()
     proxyStopRequested = pyqtSignal()
     proxyRestartRequested = pyqtSignal()
+    diagnosticsRequested = pyqtSignal()
 
     def __init__(self, context: Any, parent: QWidget | None = None) -> None:
         """Initialize the SettingsPage instance."""
@@ -580,7 +581,14 @@ class SettingsPage(ScrollPage):
         self.proxy_restart_button.setObjectName("GhostButton")
         self.proxy_restart_button.setToolTip("Перезапустить локальный прокси")
         self.proxy_restart_button.clicked.connect(self.proxyRestartRequested.emit)
+        self.diagnostics_button = QPushButton("Серверы")
+        self.diagnostics_button.setObjectName("GhostButton")
+        self.diagnostics_button.setToolTip(
+            "Открыть 상태 серверов, журнал и команды запуска"
+        )
+        self.diagnostics_button.clicked.connect(self.diagnosticsRequested.emit)
         proxy_row.addStretch(1)
+        proxy_row.addWidget(self.diagnostics_button)
         proxy_row.addWidget(self.proxy_start_button)
         proxy_row.addWidget(self.proxy_stop_button)
         proxy_row.addWidget(self.proxy_restart_button)

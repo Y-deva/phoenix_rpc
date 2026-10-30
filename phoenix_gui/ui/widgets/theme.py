@@ -471,6 +471,12 @@ QLabel {
     background: transparent;
 }
 
+QLabel#DialogTitle {
+    font-size: 22px;
+    font-weight: 700;
+    color: @text@;
+}
+
 QLabel#PageTitle {
     font-size: @fs_xl@pt;
     font-weight: 700;
@@ -600,6 +606,12 @@ QLabel#PillNeutral {
     padding: 3px 8px;
     font-size: @fs_xs@pt;
     font-weight: 600;
+}
+
+QLabel#Pill:hover, QLabel#PillSuccess:hover, QLabel#PillWarning:hover,
+QLabel#PillDanger:hover, QLabel#PillNeutral:hover {
+    border: 1px solid @accent@;
+    padding: 2px 7px;
 }
 
 QFrame#Sidebar {
@@ -757,11 +769,23 @@ QPushButton#GhostButton:hover, QToolButton#GhostButton:hover {
     color: @text@;
 }
 
+QPushButton#GhostButton:disabled, QToolButton#GhostButton:disabled {
+    color: @faint@;
+    background: transparent;
+    border-color: transparent;
+}
+
 QPushButton#DangerButton, QToolButton#DangerButton {
     background: @negative_soft@;
     border: 1px solid @negative@;
     color: @negative@;
     font-weight: 600;
+}
+
+QPushButton#DangerButton:disabled, QToolButton#DangerButton:disabled {
+    color: @faint@;
+    background: @surface_alt@;
+    border-color: @border@;
 }
 
 QPushButton#DangerButton:hover, QToolButton#DangerButton:hover {

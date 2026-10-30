@@ -1,16 +1,14 @@
 import os
-import sys
 import platform
 import getpass
+
 
 def _daemon_conf_path():
     system = platform.system()
 
     if system == "Windows":
         user = os.environ.get("USERNAME") or getpass.getuser()
-        base = os.path.join(
-            "C:\\Users", user, "AppData", "Roaming", "novacoin"
-        )
+        base = os.path.join("C:\\Users", user, "AppData", "Roaming", "novacoin")
         appdata = os.environ.get("APPDATA")
         if appdata:
             base = os.path.join(appdata, "novacoin")
@@ -18,6 +16,7 @@ def _daemon_conf_path():
 
     home = os.path.expanduser("~")
     return os.path.join(home, ".novacoin", "novacoin.conf")
+
 
 def _parse_daemon_conf(path):
     result = {}
@@ -38,9 +37,11 @@ def _parse_daemon_conf(path):
             result[key] = value
     return result
 
+
 def _detect_testnet(daemon_conf):
     val = daemon_conf.get("testnet", "").lower()
     return val in ("1", "true", "yes", "on")
+
 
 def _detect_rpcport(daemon_conf, is_testnet):
     port = daemon_conf.get("rpcport")
@@ -51,6 +52,7 @@ def _detect_rpcport(daemon_conf, is_testnet):
             pass
     return 18344 if is_testnet else 8344
 
+
 def _write_config_toml(rpcuser, rpcpassword, rpcport, is_testnet, path):
     content = f"""[daemon]
 url = "http://127.0.0.1:{rpcport}"
@@ -60,6 +62,8 @@ password = "{rpcpassword}"
 [proxy]
 host = "127.0.0.1"
 port = {16665 if is_testnet else 16666}
+user = "{rpcuser}"
+password = "{rpcpassword}"
 
 [wallet]
 sat_per_byte = 1
@@ -74,14 +78,15 @@ testnet = {"true" if is_testnet else "false"}
     with open(path, "w", encoding="utf-8") as f:
         f.write(content)
 
+
 def generate_config(path="config.toml"):
     daemon_path = _daemon_conf_path()
 
-    print(f"[CONF] config.toml not found, looking for daemon conf at:")
+    print("[CONF] config.toml not found, looking for daemon conf at:")
     print(f"[CONF]   {daemon_path}")
 
     if not os.path.isfile(daemon_path):
-        print(f"[CONF] daemon conf not found")
+        print("[CONF] daemon conf not found")
         return False
 
     try:
@@ -94,7 +99,7 @@ def generate_config(path="config.toml"):
     rpcpassword = daemon_conf.get("rpcpassword")
 
     if not rpcuser or not rpcpassword:
-        print(f"[CONF] rpcuser/rpcpassword missing in daemon conf")
+        print("[CONF] rpcuser/rpcpassword missing in daemon conf")
         return False
 
     is_testnet = _detect_testnet(daemon_conf)

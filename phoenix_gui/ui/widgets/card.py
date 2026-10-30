@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtCore import QSize
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -109,6 +109,7 @@ class SectionHeader(QWidget):
 class Pill(QLabel):
     """A compact status label with semantic colors."""
 
+    clicked = pyqtSignal()
     LEVELS = {"neutral", "success", "warning", "danger", "accent"}
 
     def __init__(
@@ -119,7 +120,24 @@ class Pill(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._level = "neutral"
+        self._clickable = False
         self.set_level(level)
+
+    def set_clickable(self, clickable: bool = True) -> None:
+        """Make the pill look and behave like a small navigation control."""
+        self._clickable = clickable
+        self.setCursor(
+            Qt.CursorShape.PointingHandCursor
+            if clickable
+            else Qt.CursorShape.ArrowCursor
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_Hover, clickable)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """Emit clicked for a left click when the pill is interactive."""
+        if self._clickable and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
 
     @property
     def level(self) -> str:

@@ -376,3 +376,12 @@ def test_settings_exposes_legacy_wallet_migration(window):
     assert page.migration_button.text() == "Открыть мастер переноса"
     assert "wallet.dat" in page.migration_button.toolTip()
     assert page.migrationRequested is not None
+
+
+def test_connection_dialog_opens_and_reports_demo_state(window):
+    """The connection center must open from the main window in demo mode."""
+    window.open_connection_dialog()
+    assert window._connection_dialog is not None
+    assert window._connection_dialog.isVisible()
+    assert not window._connection_dialog.start_all.isEnabled()
+    window._connection_dialog.close()

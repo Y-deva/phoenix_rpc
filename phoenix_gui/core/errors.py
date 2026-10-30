@@ -15,10 +15,7 @@ def humanize_error(error: BaseException | Any) -> str:
     )
 
     if isinstance(error, RPCConnectionError):
-        return (
-            "Нет связи с прокси. Проверьте, что main.py запущен, "
-            "а адрес и порт в настройках совпадают."
-        )
+        return "Локальный прокси не отвечает. Запустите его или откройте журнал."
     if isinstance(error, RPCAuthError):
         return "Прокси отклонил логин или пароль. Проверьте настройки подключения."
     if isinstance(error, RPCProtocolError):
