@@ -10,8 +10,10 @@ from PyQt6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
 
 from ...core.config import ProjectConfig
 from ...core.errors import humanize_error
+from ...i18n import TranslationManager
 from ...settings import Settings
 from ...rpc.service import WalletService
+from ..widgets.privacy import PrivacyManager
 from ..widgets.theme import ThemeManager
 
 
@@ -23,6 +25,8 @@ class PageContext:
     settings: Settings
     themes: ThemeManager
     config: ProjectConfig
+    translations: TranslationManager | None = None
+    privacy: PrivacyManager | None = None
 
 
 class BasePage(QWidget):
@@ -50,6 +54,17 @@ class BasePage(QWidget):
         self.config = context.config
         self._loaded = False
         self._refreshing = False
+
+    def tr_text(self, text: str) -> str:
+        """Translate dynamic page text through the shared manager."""
+        if self.context.translations is None:
+            return text
+        return self.context.translations.tr(text)
+
+    def protect(self, *widgets, radius: float = 9.0) -> None:
+        """Register statistics widgets with the global privacy manager."""
+        if self.context.privacy is not None:
+            self.context.privacy.register(*widgets, radius=radius)
 
     @property
     def tokens(self) -> dict[str, str]:

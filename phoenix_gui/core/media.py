@@ -16,11 +16,10 @@ from PyQt6.QtCore import QPointF, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QImage,
-    QLinearGradient,
     QPainter,
     QPainterPath,
+    QPen,
     QPixmap,
-    QRadialGradient,
 )
 from PyQt6.QtWidgets import QWidget
 
@@ -52,7 +51,7 @@ def _with_alpha(color: QColor, alpha: int) -> QColor:
 
 
 def render_default_artwork(tokens: Mapping[str, str], size: QSize) -> QPixmap:
-    """Render the generated abstract backdrop for a given size."""
+    """Render the generated geometric backdrop for a given size."""
     width = max(1, size.width())
     height = max(1, size.height())
     pixmap = QPixmap(width, height)
@@ -60,67 +59,39 @@ def render_default_artwork(tokens: Mapping[str, str], size: QSize) -> QPixmap:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    background = QLinearGradient(0, 0, width, height)
-    background.setColorAt(0.0, _color(tokens, "bg"))
-    background.setColorAt(0.55, _color(tokens, "bg_alt"))
-    background.setColorAt(1.0, _color(tokens, "bg"))
-    painter.fillRect(0, 0, width, height, background)
-
     accent = _color(tokens, "accent", "#ff8a3d")
-    secondary = _color(tokens, "accent_soft", "#ffb27a")
+    border = _color(tokens, "border", "#2a2a2a")
+    short = min(width, height)
 
-    def glow(
-        center_x: float, center_y: float, radius: float, color: QColor, alpha: int
-    ) -> None:
-        """Draw one soft radial spotlight."""
-        gradient = QRadialGradient(
-            QPointF(center_x * width, center_y * height),
-            radius * max(width, height),
-        )
-        gradient.setColorAt(0.0, _with_alpha(color, alpha))
-        gradient.setColorAt(0.45, _with_alpha(color, int(alpha * 0.35)))
-        gradient.setColorAt(1.0, _with_alpha(color, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
-        painter.drawEllipse(
-            QPointF(center_x * width, center_y * height),
-            int(radius * max(width, height)),
-            int(radius * max(width, height)),
-        )
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(_with_alpha(accent, 12))
+    painter.drawEllipse(
+        QPointF(width * 0.82, height * 0.18), short * 0.38, short * 0.38
+    )
+    painter.setBrush(_with_alpha(accent, 8))
+    painter.drawEllipse(QPointF(width * 0.1, height * 0.88), short * 0.28, short * 0.28)
 
-    glow(0.78, 0.18, 0.45, accent, 80)
-    glow(0.18, 0.82, 0.42, secondary, 48)
-    glow(0.55, 0.55, 0.55, accent, 20)
-
-    grid_pen = _with_alpha(_color(tokens, "border"), 24)
+    grid_pen = _with_alpha(border, 30)
     painter.setPen(grid_pen)
-    step = max(48, int(min(width, height) / 14))
+    step = max(52, int(short / 13))
     for x in range(0, width + step, step):
         painter.drawLine(x, 0, x, height)
     for y in range(0, height + step, step):
         painter.drawLine(0, y, width, y)
 
-    ring = _with_alpha(accent, 46)
     painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.setPen(ring)
-    radius = int(min(width, height) * 0.33)
-    center = QPointF(width * 0.82, height * 0.28)
+    painter.setPen(_with_alpha(accent, 52))
+    radius = int(short * 0.31)
+    center = QPointF(width * 0.82, height * 0.24)
     painter.drawEllipse(center, radius, radius)
-    painter.setPen(_with_alpha(accent, 24))
-    painter.drawEllipse(center, int(radius * 1.18), int(radius * 1.18))
+    painter.setPen(_with_alpha(accent, 26))
+    painter.drawEllipse(center, int(radius * 1.2), int(radius * 1.2))
 
+    painter.setPen(QPen(_with_alpha(accent, 24), 1))
     path = QPainterPath()
     path.moveTo(width * 0.58, height)
-    path.cubicTo(
-        width * 0.66, height * 0.62, width * 0.88, height * 0.52, width, height * 0.38
-    )
-    painter.setPen(_with_alpha(accent, 26))
+    path.lineTo(width, height * 0.36)
     painter.drawPath(path)
-
-    vignette = QLinearGradient(0, 0, 0, height)
-    vignette.setColorAt(0.0, _with_alpha(_color(tokens, "bg"), 0))
-    vignette.setColorAt(1.0, _with_alpha(_color(tokens, "bg"), 150))
-    painter.fillRect(0, 0, width, height, vignette)
     painter.end()
     return pixmap
 
@@ -393,11 +364,7 @@ class MediaBackdrop(QWidget):
             tint = _color(self._tokens, "bg")
             alpha = int(255 * self._settings.media_dim / 100)
             painter.fillRect(self.rect(), _with_alpha(tint, alpha))
-        gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0.0, _with_alpha(_color(self._tokens, "bg"), 26))
-        gradient.setColorAt(0.55, _with_alpha(_color(self._tokens, "bg"), 8))
-        gradient.setColorAt(1.0, _with_alpha(_color(self._tokens, "bg"), 148))
-        painter.fillRect(self.rect(), gradient)
+            painter.fillRect(self.rect(), _with_alpha(tint, 26))
         painter.end()
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802 - Qt API

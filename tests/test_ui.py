@@ -24,6 +24,7 @@ from phoenix_gui.ui.widgets.table import Column, SortableTable, amount_item, tex
         "receive",
         "transactions",
         "coins",
+        "storage",
         "analytics",
         "console",
         "settings",
@@ -39,7 +40,7 @@ def test_every_page_navigates_and_refreshes(window, qtbot, page_id):
 
 def test_demo_status_and_title(window):
     assert "Демо" in window.windowTitle()
-    assert window.network_pill.text() == "Демо-режим"
+    assert window.network_pill.text() == "Демо-сеть"
     assert window.footer_parser.text() == "Парсер: демо"
 
 
@@ -258,3 +259,88 @@ def test_demo_connection_change_keeps_local_service(window):
     settings_page = window._pages["settings"]
     settings_page.connectionChanged.emit()
     assert isinstance(window.service, DemoService)
+
+
+def test_storage_upload_and_download_roundtrip(window, qtbot, tmp_path):
+    window.navigate("storage")
+    page = window.current_page
+    source = tmp_path / "report.txt"
+    source.write_text("phoenix storage test", encoding="utf-8")
+    page.file_field.set_path(str(source))
+    page.comment_input.setText("test upload")
+    page._start_upload()
+    qtbot.waitUntil(lambda: bool(page.file_id_output.text()), timeout=6000)
+    file_id = page.file_id_output.text()
+    assert len(file_id) == 64
+    assert page.file_id_input.text() == file_id
+    page.extension_input.setText("txt")
+    page._start_download()
+    qtbot.waitUntil(lambda: bool(page.download_result.text()), timeout=6000)
+    target = page.download_result.text()
+    assert target.endswith(".txt")
+    from pathlib import Path as _Path
+
+    assert _Path(target).is_file()
+
+
+def test_storage_rejects_invalid_id(window, qtbot):
+    window.navigate("storage")
+    page = window.current_page
+    page.file_id_input.setText("not-a-graph-id")
+    page._start_download()
+    assert "64" in page.download_status.text()
+    assert not page.download_result.isVisible()
+
+
+def test_coin_selection_survives_refresh(window, qtbot):
+    window.navigate("coins")
+    page = window.current_page
+    qtbot.waitUntil(lambda: page.table.rowCount() >= 2, timeout=6000)
+    page.table.item(0, 0).setCheckState(Qt.CheckState.Checked)
+    page.table.item(1, 0).setCheckState(Qt.CheckState.Checked)
+    page.refresh()
+    qtbot.waitUntil(lambda: not page._refreshing, timeout=6000)
+    states = [
+        page.table.item(row, 0).checkState() for row in range(page.table.rowCount())
+    ]
+    assert states.count(Qt.CheckState.Checked) == 2
+
+
+def test_privacy_toggle_blurs_balances_and_statistics(window, qtbot):
+    """The eye button hides numeric data globally and restores it."""
+    window.navigate("overview")
+    page = window.current_page
+    qtbot.waitUntil(lambda: not page._refreshing, timeout=6000)
+    assert page.balance_label.graphicsEffect() is None
+    assert window.privacy.hidden is False
+
+    page.privacy_button.click()
+    qtbot.wait(80)
+    assert window.privacy.hidden is True
+    assert page.balance_label.graphicsEffect() is not None
+    assert page.activity_chart.canvas.graphicsEffect() is not None
+    assert page.pending_card.value_label.graphicsEffect() is not None
+    assert window.settings.get("privacy/hidden") is True
+
+    window.navigate("transactions")
+    qtbot.waitUntil(lambda: not window.current_page._refreshing, timeout=6000)
+    assert window.current_page.table.viewport().graphicsEffect() is not None
+
+    window.navigate("overview")
+    page.privacy_button.click()
+    qtbot.wait(80)
+    assert window.privacy.hidden is False
+    assert page.balance_label.graphicsEffect() is None
+    assert window.current_page.activity_chart.canvas.graphicsEffect() is None
+
+
+def test_privacy_state_round_trips_through_settings(settings):
+    """A fresh manager sees the persisted eye state."""
+    from phoenix_gui.ui.widgets.privacy import PrivacyManager
+
+    first = PrivacyManager(settings)
+    first.set_hidden(True)
+    second = PrivacyManager(settings)
+    assert second.hidden is True
+    second.set_hidden(False)
+    assert settings.get("privacy/hidden") is False

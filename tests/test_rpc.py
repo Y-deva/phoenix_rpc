@@ -168,3 +168,24 @@ def test_new_address_and_send_use_expected_arguments():
     assert service.send_to_address("2NNew", Decimal("1.5"), "hi") == "deadbeef"
     assert calls[0] == ("getnewaddress", ["Main"])
     assert calls[1][1][:2] == ["2NNew", 1.5]
+
+
+def test_service_pstore_calls():
+    calls = []
+    client = make_client(
+        {
+            "pstore": {"file_id": "a" * 64, "tx_count": 1},
+            "pload": {"path": "/tmp/file.bin"},
+            "pcancel": {"cancelled": 2},
+        },
+        calls,
+    )
+    service = WalletService(client)
+    assert service.pstore("/tmp/source.bin", "note")["file_id"] == "a" * 64
+    assert service.pload("b" * 64, "bin")["path"] == "/tmp/file.bin"
+    assert service.pcancel()["cancelled"] == 2
+    assert calls == [
+        ("pstore", ["/tmp/source.bin", "note"]),
+        ("pload", ["b" * 64, "bin"]),
+        ("pcancel", []),
+    ]

@@ -92,7 +92,7 @@ def format_nvc(
     trim: bool = True,
     unit: str = "NVC",
 ) -> str:
-    """Format an amount and append the Phoenix ticker."""
+    """Format an amount and append the coin ticker."""
     return f"{format_amount(value, places=places, trim=trim)} {unit}"
 
 

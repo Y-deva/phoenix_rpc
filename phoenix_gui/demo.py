@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tempfile
 import time
+from pathlib import Path
 from decimal import Decimal
 from typing import Any, Mapping, Sequence
 
@@ -75,6 +77,7 @@ class DemoService:
         ]
         self._transactions = self._build_history(now)
         self._pending_raw: dict[str, Any] | None = None
+        self._pstore_files: dict[str, bytes] = {}
         self._refresh_address_totals()
 
     def _build_history(self, now: int) -> list[Transaction]:
@@ -88,7 +91,7 @@ class DemoService:
             ("send", Decimal("-1.10000000"), 345600, 48, "Подписка"),
             ("immature", Decimal("1.50000000"), 432000, 3, "Не созрело"),
             ("receive", Decimal("4.25000000"), 518400, 35, "Продажа"),
-            ("send", Decimal("-0.05000000"), 604800, 20, "Комиссия сети"),
+            ("send", Decimal("-0.05000000"), 604800, 20, "Сетевой перевод"),
             ("generate", Decimal("0.78000000"), 691200, 12, "Награда PoS"),
             ("receive", Decimal("2.00000000"), 777600, 9, "Перевод"),
             ("consolidate", Decimal("-0.30000000"), 864000, 4, "Слияние"),
@@ -337,6 +340,43 @@ class DemoService:
             "vin": [],
             "vout": [],
         }
+
+    def pstore(self, source: str, comment: str = "") -> dict[str, Any]:
+        """Pretend to upload a file and remember it for later download."""
+        path = Path(source)
+        if path.is_file():
+            payload = path.read_bytes()[:4096]
+        else:
+            payload = f"demo pstore source: {source}".encode("utf-8")
+        file_id = hashlib.sha256(payload + source.encode("utf-8")).hexdigest()
+        self._pstore_files[file_id] = payload or b"Phoenix demo payload"
+        return {
+            "file_id": file_id,
+            "tx_count": max(1, (len(payload) + 4095) // 4096),
+            "size": len(payload),
+            "split_included": False,
+            "split_txid": None,
+            "anchor": f"{file_id[:12]}:0",
+        }
+
+    def pload(self, file_id: str, extension: str = "bin") -> dict[str, Any]:
+        """Write a demo file into a temporary downloads folder."""
+        payload = self._pstore_files.get(file_id, b"Phoenix demo payload")
+        suffix = "".join(ch for ch in extension if ch.isalnum())[:16] or "bin"
+        folder = Path(tempfile.gettempdir()) / "phoenix-demo-downloads"
+        folder.mkdir(parents=True, exist_ok=True)
+        target = folder / f"{file_id[:16]}.{suffix}"
+        target.write_bytes(payload)
+        return {
+            "path": str(target),
+            "size": len(payload),
+            "file_id": file_id,
+            "ext": suffix,
+        }
+
+    def pcancel(self) -> dict[str, Any]:
+        """Report that the demo queue is always empty."""
+        return {"cancelled": 0, "anchor": None}
 
     def available_addresses(self) -> list[AddressInfo]:
         """Return addresses for receive and expert flows."""

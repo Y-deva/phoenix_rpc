@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from ...core.errors import humanize_error
 from ...core.sounds import SoundPlayer
+from ...i18n import TranslationManager
 from ...core.tasks import run_async
 from ...rpc.client import RPCClient
 from ...ui.widgets.card import Card, SectionHeader
@@ -48,7 +49,7 @@ from .base import ScrollPage
 
 VERBOSITY_HINTS = {
     0: "Только главное: суммы, статусы и основные действия.",
-    1: "Баланс, комиссии, подтверждения и подсказки по умолчанию.",
+    1: "Баланс, подтверждения и подсказки по умолчанию.",
     2: "Сырые данные RPC, задержки запросов и дополнительные детали.",
 }
 
@@ -72,6 +73,9 @@ class SettingsPage(ScrollPage):
         self._draft_custom: dict[str, str] = {}
         self._draft_theme_key = self.settings.theme
         self._sound_player: SoundPlayer | None = None
+        self.translations: TranslationManager | None = getattr(
+            context, "translations", None
+        )
         self._build()
         self._sync_from_settings()
         self.settings.changed.connect(self._on_setting_changed)
@@ -108,6 +112,8 @@ class SettingsPage(ScrollPage):
             "Внешний вид",
             "Настройте графику и нажмите Применить, чтобы увидеть результат",
         )
+        if self.translations is not None:
+            self._build_translation_rows(form)
         theme_row = QHBoxLayout()
         theme_row.setSpacing(10)
         self.theme_combo = QComboBox()
@@ -127,6 +133,8 @@ class SettingsPage(ScrollPage):
         colors.setHorizontalSpacing(8)
         colors.setVerticalSpacing(8)
         self._color_buttons: dict[str, QPushButton] = {}
+        if self.translations is not None:
+            self.translations.languageChanged.connect(self._refresh_color_buttons)
         labels = {
             "bg": "Фон",
             "sidebar": "Панель",
@@ -235,6 +243,124 @@ class SettingsPage(ScrollPage):
         apply_row.addWidget(self.apply_button)
         form.addRow("", apply_row)
 
+    def _build_translation_rows(self, form: QFormLayout) -> None:
+        """Language picker and a reloadable external catalog directory."""
+        assert self.translations is not None
+        self.language_combo = QComboBox()
+        self.language_combo.setToolTip("Язык интерфейса применяется сразу")
+        self.language_combo.currentIndexChanged.connect(self._on_language_changed)
+        form.addRow("Язык", self.language_combo)
+
+        directory_row = QHBoxLayout()
+        directory_row.setSpacing(8)
+        self.translations_path = PathField(
+            mode="dir", caption="Открыть каталог переводов"
+        )
+        self.translations_path.set_path(str(self.translations.directory))
+        self.translations_path.setToolTip(
+            "Каталог с JSON-файлами переводов. "
+            "Новые языки подхватываются без перезапуска."
+        )
+        self.translations_path.edit.editingFinished.connect(
+            self._apply_translations_directory
+        )
+        # The browse dialog returns after the native picker closes, so this
+        # slot runs with the freshly selected path.
+        self.translations_path.browse.clicked.connect(
+            self._apply_translations_directory
+        )
+        self.translations_reload = QPushButton("Обновить")
+        self.translations_reload.setObjectName("GhostButton")
+        self.translations_reload.setIcon(
+            icon("refresh", self.tokens.get("muted", "#A7B1C2"), 15)
+        )
+        self.translations_reload.setToolTip("Перечитать каталог переводов")
+        self.translations_reload.clicked.connect(self._apply_translations_directory)
+        self.translations_open = QPushButton("Открыть")
+        self.translations_open.setObjectName("GhostButton")
+        self.translations_open.setIcon(
+            icon("folder", self.tokens.get("muted", "#A7B1C2"), 15)
+        )
+        self.translations_open.setToolTip("Открыть каталог переводов")
+        self.translations_open.clicked.connect(self._open_translations_folder)
+        directory_row.addWidget(self.translations_path, 1)
+        directory_row.addWidget(self.translations_reload)
+        directory_row.addWidget(self.translations_open)
+        form.addRow("Каталог переводов", directory_row)
+
+        self.translations_status = QLabel()
+        self.translations_status.setObjectName("Faint")
+        self.translations_status.setWordWrap(True)
+        form.addRow("", self.translations_status)
+        self._populate_languages()
+        self._refresh_translation_status()
+
+    def _populate_languages(self) -> None:
+        """Fill the language selector from the active translation manager."""
+        if self.translations is None:
+            return
+        self._syncing = True
+        try:
+            self.language_combo.blockSignals(True)
+            self.language_combo.clear()
+            for language in self.translations.available_languages():
+                self.language_combo.addItem(language.display_name, language.code)
+            index = self.language_combo.findData(self.translations.language)
+            if index >= 0:
+                self.language_combo.setCurrentIndex(index)
+            self.language_combo.blockSignals(False)
+        finally:
+            self._syncing = False
+
+    def _refresh_translation_status(self) -> None:
+        """Show catalog count and any non-fatal loading problems."""
+        if self.translations is None:
+            return
+        count = len(self.translations.available_languages())
+        errors = self.translations.errors
+        if errors:
+            self.translations_status.setText(
+                f"Загружено языков: {count}. Ошибки: " + "; ".join(errors[:2])
+            )
+            self.translations_status.setProperty("error", True)
+        else:
+            self.translations_status.setText(
+                f"Загружено языков: {count}. Файлы JSON можно добавлять в каталог."
+            )
+            self.translations_status.setProperty("error", False)
+        self.translations_status.style().unpolish(self.translations_status)
+        self.translations_status.style().polish(self.translations_status)
+
+    def _on_language_changed(self, index: int) -> None:
+        """Activate the selected interface language immediately."""
+        if self._syncing or self.translations is None or index < 0:
+            return
+        code = self.language_combo.itemData(index)
+        if code and self.translations.set_language(str(code)):
+            self._refresh_translation_status()
+
+    def _apply_translations_directory(self) -> None:
+        """Reload catalogs from the path entered in settings."""
+        if self.translations is None:
+            return
+        path = self.translations_path.path()
+        ok, error = self.translations.set_directory(path or None)
+        if not ok:
+            self.translations_status.setText(error)
+            self.translations_status.setProperty("error", True)
+            self.translations_status.style().unpolish(self.translations_status)
+            self.translations_status.style().polish(self.translations_status)
+            return
+        self.translations_path.set_path(str(self.translations.directory))
+        self._populate_languages()
+        self._refresh_translation_status()
+
+    def _open_translations_folder(self) -> None:
+        """Open the active translation catalog directory."""
+        if self.translations is None:
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.translations.directory)))
+
     def _build_behavior(self) -> None:
         """Refresh cadence, charts and confirmation behavior."""
         card, form = self._section(
@@ -263,9 +389,7 @@ class SettingsPage(ScrollPage):
         form.addRow("Период графиков", self.chart_days_spin)
 
         self.confirm_send_box = QCheckBox("Спрашивать подтверждение перед отправкой")
-        self.confirm_send_box.setToolTip(
-            "Показывать диалог с адресом, суммой и комиссией"
-        )
+        self.confirm_send_box.setToolTip("Показывать диалог с адресом и суммой")
         self.confirm_send_box.toggled.connect(
             lambda checked: self.settings.set("behavior/confirm_send", checked)
         )
@@ -526,6 +650,11 @@ class SettingsPage(ScrollPage):
         try:
             theme_index = self.theme_combo.findData(self.settings.theme)
             self.theme_combo.setCurrentIndex(max(0, theme_index))
+            if self.translations is not None:
+                index = self.language_combo.findData(self.translations.language)
+                self.language_combo.setCurrentIndex(max(0, index))
+                self.translations_path.set_path(str(self.translations.directory))
+                self._refresh_translation_status()
             self._draft_theme_key = self.settings.theme
             self._draft_custom = dict(self.settings.custom_colors)
             self._refresh_color_buttons()
@@ -648,14 +777,17 @@ class SettingsPage(ScrollPage):
         self._mark_appearance_dirty()
 
     def _token_label(self, token: str) -> str:
-        """Return the Russian label for a primary color token."""
-        return {
+        """Return the localized label for a primary color token."""
+        label = {
             "bg": "Фон",
             "sidebar": "Панель",
             "surface": "Карточки",
             "accent": "Акцент",
             "text": "Текст",
         }.get(token, token)
+        if self.translations is not None:
+            return self.translations.tr(label)
+        return label
 
     def _refresh_color_buttons(self) -> None:
         """Paint color swatches with readable captions and warnings."""
@@ -674,9 +806,12 @@ class SettingsPage(ScrollPage):
             button.setToolTip(f"{self._token_label(token)}: {color.name()}")
         ratio = contrast_ratio(theme.color("text"), theme.color("bg"))
         if ratio < 4.5:
-            self.color_warning.setText(
-                f"Низкий контраст текста и фона ({ratio:.1f}:1). Проверьте читаемость."
-            )
+            prefix = "Низкий контраст текста и фона"
+            suffix = "Проверьте читаемость."
+            if self.translations is not None:
+                prefix = self.translations.tr(prefix)
+                suffix = self.translations.tr(suffix)
+            self.color_warning.setText(f"{prefix} ({ratio:.1f}:1). {suffix}")
             self.color_warning.show()
         else:
             self.color_warning.hide()

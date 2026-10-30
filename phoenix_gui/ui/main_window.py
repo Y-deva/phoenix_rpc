@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .. import __app_name__, __version__
+from .. import __version__
 from ..core.config import ProjectConfig
 from ..core.daemon import STATE_RUNNING, DaemonProcess
 from ..core.errors import humanize_error
@@ -29,6 +29,7 @@ from ..core.formatting import format_int, format_percent
 from ..core.media import MediaBackdrop
 from ..core.sounds import SoundPlayer
 from ..core.sync import SyncStatus, build_sync_status, load_parser_progress
+from ..i18n import SOURCE_LANGUAGE, TranslationManager
 from ..rpc.client import RPCClient
 from ..rpc.service import WalletService
 from ..settings import Settings
@@ -36,12 +37,14 @@ from .dialogs.shortcuts import ShortcutsDialog
 from .dialogs.tx_details import TxDetailsDialog
 from .pages.analytics import AnalyticsPage
 from .pages.base import PageContext
+from .widgets.privacy import PrivacyManager
 from .pages.coins import CoinsPage
 from .pages.console import ConsolePage
 from .pages.overview import OverviewPage
 from .pages.receive import ReceivePage
 from .pages.send import SendPage
 from .pages.settings import SettingsPage
+from .pages.storage import StoragePage
 from .pages.transactions import TransactionsPage
 from .widgets.card import Pill
 from .widgets.animations import Motion
@@ -56,6 +59,7 @@ PAGE_CLASSES = (
     ReceivePage,
     TransactionsPage,
     CoinsPage,
+    StoragePage,
     AnalyticsPage,
     ConsolePage,
     SettingsPage,
@@ -67,6 +71,7 @@ NAV_META: tuple[tuple[str, str, str], ...] = (
     ("receive", "Получить", "receive"),
     ("transactions", "История", "transactions"),
     ("coins", "Монеты", "coins"),
+    ("storage", "Хранилище", "file"),
     ("analytics", "Аналитика", "chart"),
     ("console", "Консоль", "terminal"),
     ("settings", "Настройки", "settings"),
@@ -94,8 +99,15 @@ class MainWindow(QMainWindow):
         self.service = service
         self.themes = themes
         self.demo = demo
+        self.translations = TranslationManager(settings, self)
+        self.privacy = PrivacyManager(settings, self)
         self.context = PageContext(
-            service=service, settings=settings, themes=themes, config=project
+            service=service,
+            settings=settings,
+            themes=themes,
+            config=project,
+            translations=self.translations,
+            privacy=self.privacy,
         )
         self._online = False
         self._checking = False
@@ -114,20 +126,62 @@ class MainWindow(QMainWindow):
         self._build_pages()
         self._build_daemon()
         self._bind_shortcuts()
+        if self.translations.language != SOURCE_LANGUAGE:
+            self.translations.translate_tree(self)
         self._start_timers()
         self.themes.changed.connect(self._on_theme_changed)
+        self.translations.languageChanged.connect(self._on_language_changed)
         self._on_theme_changed(self.themes.theme)
+        self._start_translation_timer()
         self._restore_geometry()
         QTimer.singleShot(250, self._check_connection)
         QTimer.singleShot(400, self._maybe_start_daemon)
 
     # ------------------------------------------------------------------
+    # Language
+    # ------------------------------------------------------------------
+    def _start_translation_timer(self) -> None:
+        """Refresh translated dynamic labels while a foreign language is active."""
+        self._translation_timer = QTimer(self)
+        self._translation_timer.setInterval(800)
+        self._translation_timer.timeout.connect(self._retranslate_visible)
+        if self.translations.language != SOURCE_LANGUAGE:
+            self._translation_timer.start()
+
+    def _retranslate_visible(self) -> None:
+        """Translate the visible page after asynchronous data updates."""
+        if self.translations.language == SOURCE_LANGUAGE:
+            return
+        self.translations.translate_tree(self)
+
+    def _on_language_changed(self, code: str) -> None:
+        """Apply a new language to the whole window and its dynamic parts."""
+        self.translations.translate_tree(self)
+        self._apply_window_title()
+        page = self.stack.currentWidget()
+        if page is not None and getattr(page, "page_id", "") != "settings":
+            page.refresh()
+        if code == SOURCE_LANGUAGE:
+            self._translation_timer.stop()
+        else:
+            self._translation_timer.start()
+        language = self.translations.active_language
+        self.toast.info(
+            f"{self.translations.tr('Язык интерфейса')}: {language.native_name}",
+            title=self.translations.tr("Язык"),
+        )
+
+    # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
+    def _apply_window_title(self) -> None:
+        """Keep the native title bar in sync with the active language."""
+        network = self.translations.tr(self._network_caption())
+        self.setWindowTitle(f"Novacoin - {network}")
+
     def _setup_window(self) -> None:
         """Set titles, size constraints and the central backdrop."""
-        network = self._network_caption()
-        self.setWindowTitle(f"{__app_name__} - {network}")
+        self._apply_window_title()
         self.setMinimumSize(1120, 720)
         self.resize(1360, 880)
         self.setAcceptDrops(True)
@@ -177,10 +231,10 @@ class MainWindow(QMainWindow):
         brand_row.setSpacing(10)
         self.brand_label = QLabel()
         self.brand_label.setFixedSize(38, 38)
-        self.brand_label.setToolTip("Phoenix Wallet")
+        self.brand_label.setToolTip("Novacoin")
         brand_text = QVBoxLayout()
         brand_text.setSpacing(1)
-        brand_name = QLabel("Phoenix")
+        brand_name = QLabel("Novacoin")
         brand_name.setObjectName("SectionTitle")
         self.network_name = QLabel(self._network_caption())
         self.network_name.setObjectName("Faint")
@@ -345,7 +399,7 @@ class MainWindow(QMainWindow):
     def _build_daemon(self) -> None:
         """Create the owned daemon process controller."""
         if self.demo:
-            self.daemon_pill.set_text("Демо-режим")
+            self.daemon_pill.set_text("Локальные данные")
             self.daemon_pill.set_level("accent")
             self._pages["settings"].set_daemon_status(
                 "Демо-режим: novacoind не запускается",
@@ -383,6 +437,10 @@ class MainWindow(QMainWindow):
         page.activate()
         if self._motion is not None:
             self._motion.page_in(page)
+        if self.translations.language != SOURCE_LANGUAGE:
+            self.translations.translate_tree(self)
+            if page_id != "settings":
+                page.refresh()
 
     @property
     def current_page(self) -> Any:
@@ -411,14 +469,13 @@ class MainWindow(QMainWindow):
             self._online = True
             self._checking = False
             self.banner.setVisible(False)
-            self.network_pill.set_text("Демо-режим")
+            self.network_pill.set_text("Демо-сеть")
             self.network_pill.set_level("accent")
             self.network_pill.setToolTip(
                 "Данные созданы локально, сеть не используется"
             )
-            self.sync_pill.set_text("Демо")
-            self.sync_pill.set_level("neutral")
-            self.footer_status.setText("Демо-режим")
+            self.sync_pill.setVisible(False)
+            self.footer_status.setText("Локальные данные")
             self.footer_sync.setText("Сеть не используется")
             self.footer_parser.setText("Парсер: демо")
             page = self.current_page
@@ -809,7 +866,7 @@ class MainWindow(QMainWindow):
         if not QSystemTrayIcon.isSystemTrayAvailable():
             return
         self.tray = QSystemTrayIcon(app_icon(self.themes.theme), self)
-        self.tray.setToolTip(__app_name__)
+        self.tray.setToolTip(f"Novacoin - {self._network_caption()}")
         menu = QMenu(self)
         show_action = QAction("Открыть", self)
         show_action.triggered.connect(self._raise_window)

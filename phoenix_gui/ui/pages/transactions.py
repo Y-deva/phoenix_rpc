@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QSize, QStandardPaths, Qt
-from PyQt6.QtGui import QBrush, QColor, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -132,11 +132,9 @@ class TransactionsPage(BasePage):
         summary_row.setSpacing(8)
         self.received_pill = Pill("Получено: 0", "success")
         self.sent_pill = Pill("Отправлено: 0", "accent")
-        self.fee_pill = Pill("Комиссии: 0", "neutral")
         self.count_pill = Pill("Операций: 0", "neutral")
         summary_row.addWidget(self.received_pill)
         summary_row.addWidget(self.sent_pill)
-        summary_row.addWidget(self.fee_pill)
         summary_row.addWidget(self.count_pill)
         summary_row.addStretch(1)
         self.load_more_button = QPushButton("Загрузить еще")
@@ -154,13 +152,12 @@ class TransactionsPage(BasePage):
         self.table = SortableTable(
             [
                 Column("Дата", 135),
-                Column("Тип", 155),
-                Column("Сумма", 120),
-                Column("Комиссия", 118),
+                Column("Тип", 165),
+                Column("Сумма", 130),
                 Column("Подтв.", 80),
                 Column("Статус", 140),
-                Column("Адрес", 190, stretch=True),
-                Column("Комментарий", 145),
+                Column("Адрес", 210, stretch=True),
+                Column("Комментарий", 165),
             ],
             row_height=42,
         )
@@ -177,6 +174,12 @@ class TransactionsPage(BasePage):
         self.footer = QLabel("")
         self.footer.setObjectName("Muted")
         root.addWidget(self.footer)
+        self.protect(
+            self.received_pill,
+            self.sent_pill,
+            self.count_pill,
+            self.table.viewport(),
+        )
 
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self._export_csv)
 
@@ -240,6 +243,10 @@ class TransactionsPage(BasePage):
     def _rebuild_table(self) -> None:
         """Rebuild the table from the loaded transaction list."""
         mono = self.themes.mono_font
+        header = self.table.horizontalHeader()
+        sort_column = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        scroll_position = self.table.verticalScrollBar().value()
         self.table.begin_update()
         self.table.setRowCount(0)
         for transaction in self._transactions:
@@ -260,11 +267,12 @@ class TransactionsPage(BasePage):
                 "mine": self.tokens.get("warning", "#F3C969"),
                 "immature": self.tokens.get("warning", "#F3C969"),
             }.get(transaction.kind, self.tokens.get("muted", "#A7B1C2"))
+            category_text = self.tr_text(category_label(transaction.category))
             type_item = text_item(
-                category_label(transaction.category),
+                category_text,
                 sort_key=transaction.category,
                 color=kind_color,
-                tooltip=transaction.category,
+                tooltip=category_text,
             )
             type_item.setData(Qt.ItemDataRole.UserRole, transaction)
             self.table.setItem(row, 1, type_item)
@@ -279,16 +287,6 @@ class TransactionsPage(BasePage):
                     signed=True,
                 ),
             )
-            fee_text = format_nvc(transaction.fee) if transaction.fee else "-"
-            fee_item = SortItem(fee_text, transaction.fee)
-            fee_item.setTextAlignment(
-                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
-            fee_item.setForeground(self._brush(self.tokens.get("muted", "#A7B1C2")))
-            if mono and transaction.fee:
-                fee_item.setFont(QFont(mono))
-            self.table.setItem(row, 3, fee_item)
-
             confirm_item = SortItem(
                 str(transaction.confirmations), transaction.confirmations
             )
@@ -296,7 +294,7 @@ class TransactionsPage(BasePage):
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
             )
             confirm_item.setForeground(self._brush(self.tokens.get("muted", "#A7B1C2")))
-            self.table.setItem(row, 4, confirm_item)
+            self.table.setItem(row, 3, confirm_item)
 
             status_color = {
                 "confirmed": self.tokens.get("positive", "#3DD6A0"),
@@ -307,9 +305,9 @@ class TransactionsPage(BasePage):
             status_rank = {"confirmed": 0, "pending": 1, "immature": 2, "conflicted": 3}
             self.table.setItem(
                 row,
-                5,
+                4,
                 status_item(
-                    transaction.status_label,
+                    self.tr_text(transaction.status_label),
                     status_color,
                     sort_key=status_rank.get(transaction.status, 9),
                 ),
@@ -323,7 +321,7 @@ class TransactionsPage(BasePage):
                 mono=True,
                 tooltip=transaction.address,
             )
-            self.table.setItem(row, 6, address_item)
+            self.table.setItem(row, 5, address_item)
 
             comment = transaction.comment.replace("\n", " ").strip()
             comment_item = text_item(
@@ -332,10 +330,16 @@ class TransactionsPage(BasePage):
                 color=self.tokens.get("muted", "#A7B1C2"),
                 tooltip=comment,
             )
-            self.table.setItem(row, 7, comment_item)
-        self.table.end_update(sort_column=0, ascending=False)
+            self.table.setItem(row, 6, comment_item)
+        if sort_column < 0:
+            sort_column = 0
+            ascending = False
+        else:
+            ascending = sort_order == Qt.SortOrder.AscendingOrder
+        self.table.end_update(sort_column=sort_column, ascending=ascending)
         self._filter_rows()
         self._update_footer()
+        self.table.verticalScrollBar().setValue(scroll_position)
 
     def _brush(self, color: str) -> Any:
         """Create a brush from a theme color."""
@@ -383,6 +387,7 @@ class TransactionsPage(BasePage):
                         transaction.comment,
                         transaction.account,
                         category_label(transaction.category),
+                        self.tr_text(category_label(transaction.category)),
                     )
                 ).casefold()
                 visible = query in haystack
@@ -398,22 +403,19 @@ class TransactionsPage(BasePage):
         sent = -sum(
             (tx.amount for tx in self._transactions if tx.amount < 0), Decimal("0")
         )
-        fees = sum((tx.fee for tx in self._transactions if tx.fee > 0), Decimal("0"))
-        self.received_pill.set_text(f"Получено: {format_nvc(received)}")
-        self.sent_pill.set_text(f"Отправлено: {format_nvc(sent)}")
-        self.fee_pill.set_text(f"Комиссии: {format_nvc(fees)}")
-        self.count_pill.set_text(f"Операций: {len(self._transactions)}")
+        self.received_pill.set_text(self.tr_text(f"Получено: {format_nvc(received)}"))
+        self.sent_pill.set_text(self.tr_text(f"Отправлено: {format_nvc(sent)}"))
+        self.count_pill.set_text(self.tr_text(f"Операций: {len(self._transactions)}"))
         self.count_pill.setVisible(self.settings.verbosity >= 1)
-        self.fee_pill.setVisible(self.settings.verbosity >= 1)
 
     def _update_footer(self) -> None:
         """Show how many rows are visible and loaded."""
         visible = sum(
             1 for row in range(self.table.rowCount()) if not self.table.isRowHidden(row)
         )
-        text = f"Показано {visible} из {self.table.rowCount()} операций."
+        text = self.tr_text(f"Показано {visible} из {self.table.rowCount()} операций.")
         if self._has_more:
-            text += " В памяти есть еще страницы."
+            text += " " + self.tr_text("В памяти есть еще страницы.")
         self.footer.setText(text)
 
     def _refresh_summary_footer(self) -> None:

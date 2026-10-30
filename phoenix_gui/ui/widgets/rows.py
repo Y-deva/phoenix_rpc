@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
@@ -34,11 +36,13 @@ class TransactionRow(QFrame):
         tokens: dict[str, str],
         compact: bool = False,
         parent: QWidget | None = None,
+        translations: Any = None,
     ) -> None:
         """Initialize the TransactionRow instance."""
         super().__init__(parent)
         self.transaction = transaction
         self.tokens = tokens
+        self._translations = translations
         self.setObjectName("DataRow")
         self.setProperty("hoverable", True)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -54,7 +58,8 @@ class TransactionRow(QFrame):
         text_column = QVBoxLayout()
         text_column.setContentsMargins(0, 0, 0, 0)
         text_column.setSpacing(1)
-        title = QLabel(transaction.label)
+        title_text = self._tr(transaction.label)
+        title = QLabel(title_text)
         title.setObjectName("CardTitle")
         subtitle_text = format_timestamp(transaction.timestamp)
         if transaction.address:
@@ -72,21 +77,31 @@ class TransactionRow(QFrame):
                 "conflicted": "danger",
             }.get(transaction.status, "neutral")
             if transaction.status != "confirmed":
-                layout.addWidget(Pill(transaction.status_label, level))
-        amount = QLabel(f"{format_signed_nvc(transaction.amount)} NVC")
+                layout.addWidget(Pill(self._tr(transaction.status_label), level))
+        self.amount_label = QLabel(f"{format_signed_nvc(transaction.amount)} NVC")
         object_name = "AmountPositive" if transaction.amount >= 0 else "AmountNegative"
-        amount.setObjectName(object_name)
-        amount.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        amount.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        layout.addWidget(amount)
+        self.amount_label.setObjectName(object_name)
+        self.amount_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self.amount_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self.amount_label)
+
+    def _tr(self, text: str) -> str:
+        """Translate a label when a manager is available."""
+        if self._translations is None:
+            return text
+        return self._translations.tr(text)
 
     def _tooltip(self) -> str:
         """Build a compact tooltip with technical details."""
         transaction = self.transaction
         parts = [
-            f"Категория: {transaction.label}",
+            f"{self._tr('Категория')}: {self._tr(transaction.label)}",
             f"TXID: {transaction.txid}",
-            f"Подтверждений: {transaction.confirmations}",
+            f"{self._tr('Подтверждений')}: {transaction.confirmations}",
         ]
         if transaction.address:
             parts.append(f"Адрес: {transaction.address}")

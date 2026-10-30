@@ -43,7 +43,7 @@ class Theme:
 
 PHOENIX = Theme(
     key="phoenix",
-    name="Phoenix Dark",
+    name="Novacoin Dark",
     dark=True,
     tokens={
         "bg": "#0A0C10",
@@ -655,8 +655,7 @@ QFrame#SoftCard {
 }
 
 QFrame#HeroCard {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                stop:0 @surface_a@, stop:0.55 @surface_alt@, stop:1 @nav_bg@);
+    background: @surface_alt@;
     border: 1px solid @accent_border@;
     border-radius: 18px;
 }
@@ -1114,8 +1113,7 @@ QProgressBar {
 }
 
 QProgressBar::chunk {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 @accent@, stop:1 @accent_hover@);
+    background: @accent@;
     border-radius: 4px;
 }
 

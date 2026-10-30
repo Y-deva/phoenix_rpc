@@ -75,14 +75,13 @@ class AnalyticsPage(ScrollPage):
         )
         self.received_card = StatCard("Получено", "0", "За выбранный период", "receive")
         self.sent_card = StatCard("Отправлено", "0", "За выбранный период", "send")
-        self.fees_card = StatCard(
-            "Комиссии", "0", "За выбранный период", "transactions"
-        )
         for card in (
-            self.balance_card,
-            self.received_card,
-            self.sent_card,
-            self.fees_card,
+            self.balance_card.value_label,
+            self.balance_card.caption_label,
+            self.received_card.value_label,
+            self.received_card.caption_label,
+            self.sent_card.value_label,
+            self.sent_card.caption_label,
         ):
             metrics.addWidget(card, 1)
         self.body.addLayout(metrics)
@@ -90,19 +89,23 @@ class AnalyticsPage(ScrollPage):
         grid = QGridLayout()
         grid.setSpacing(14)
         self.activity_chart = ChartPanel(
-            "Объем операций", "Поступления и отправки по дням"
+            "Объем операций",
+            "Поступления и отправки по дням",
+            translations=self.context.translations,
         )
         self.flow_chart = ChartPanel(
-            "Накопленный поток", "Суммарное изменение баланса за период"
+            "Накопленный поток",
+            "Суммарное изменение баланса за период",
+            translations=self.context.translations,
         )
         self.distribution_chart = ChartPanel(
-            "Структура средств", "Доступные, ожидающие и незрелые монеты"
+            "Структура средств",
+            "Доступные, ожидающие и незрелые монеты",
+            translations=self.context.translations,
         )
-        self.fee_chart = ChartPanel("Комиссии", "Расходы на комиссии по дням")
         grid.addWidget(self.activity_chart, 0, 0)
         grid.addWidget(self.flow_chart, 0, 1)
         grid.addWidget(self.distribution_chart, 1, 0)
-        grid.addWidget(self.fee_chart, 1, 1)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         self.body.addLayout(grid)
@@ -110,8 +113,9 @@ class AnalyticsPage(ScrollPage):
         self.addresses_chart = ChartPanel(
             "Крупнейшие контрагенты",
             "Адреса с наибольшим оборотом в загруженной истории",
+            translations=self.context.translations,
         )
-        self.body.addWidget(self.addresses_chart)
+        grid.addWidget(self.addresses_chart, 1, 1)
 
         insight = Card(padding=12)
         insight_row = QHBoxLayout()
@@ -125,6 +129,20 @@ class AnalyticsPage(ScrollPage):
         insight.add_layout(insight_row)
         self.body.addWidget(insight)
         self.add_stretch()
+        self.protect(
+            self.balance_card.value_label,
+            self.balance_card.caption_label,
+            self.received_card.value_label,
+            self.received_card.caption_label,
+            self.sent_card.value_label,
+            self.sent_card.caption_label,
+            self.activity_chart.canvas,
+            self.flow_chart.canvas,
+            self.distribution_chart.canvas,
+            self.addresses_chart.canvas,
+            self.insight_pill,
+            self.insight_label,
+        )
 
     def refresh(self) -> None:
         """Reload history and balance used by all charts."""
@@ -172,7 +190,7 @@ class AnalyticsPage(ScrollPage):
 
     def _buckets(
         self,
-    ) -> tuple[list[str], list[float], list[float], list[float], list[float]]:
+    ) -> tuple[list[str], list[float], list[float], list[float]]:
         """Aggregate transactions into daily buckets for the selected period."""
         days = self.settings.chart_days
         end = date.today()
@@ -182,7 +200,6 @@ class AnalyticsPage(ScrollPage):
         ]
         received = [0.0] * days
         sent = [0.0] * days
-        fees = [0.0] * days
         for transaction in self._transactions:
             if not transaction.timestamp:
                 continue
@@ -195,13 +212,12 @@ class AnalyticsPage(ScrollPage):
                 received[index] += amount
             else:
                 sent[index] += abs(amount)
-            fees[index] += float(transaction.fee)
         cumulative: list[float] = []
         running = 0.0
         for index in range(days):
             running += received[index] - sent[index]
             cumulative.append(running)
-        return labels, received, sent, fees, cumulative
+        return labels, received, sent, cumulative
 
     def _render(self) -> None:
         """Draw all panels from the current data and theme."""
@@ -210,19 +226,16 @@ class AnalyticsPage(ScrollPage):
             self.activity_chart,
             self.flow_chart,
             self.distribution_chart,
-            self.fee_chart,
             self.addresses_chart,
         ):
             panel.set_tokens(tokens)
-        labels, received, sent, fees, cumulative = self._buckets()
+        labels, received, sent, cumulative = self._buckets()
         total_received = sum(received)
         total_sent = sum(sent)
-        total_fees = sum(fees)
         self.balance_card.set_value(f"{format_nvc(self._summary.total)}")
         self.balance_card.set_caption(f"Доступно {format_nvc(self._summary.available)}")
         self.received_card.set_value(f"{format_nvc(total_received)}")
         self.sent_card.set_value(f"{format_nvc(total_sent)}")
-        self.fees_card.set_value(f"{format_nvc(total_fees)}")
 
         if total_received or total_sent:
             self.activity_chart.plot_activity(labels, received, sent)
@@ -247,11 +260,6 @@ class AnalyticsPage(ScrollPage):
             center_title="Всего",
             center_value=format_nvc(self._summary.total),
         )
-        if total_fees:
-            self.fee_chart.plot_fees(labels, fees)
-        else:
-            self.fee_chart.show_message("Комиссии не начислялись")
-
         addresses: dict[str, float] = {}
         for transaction in self._transactions:
             if not transaction.address:
@@ -284,10 +292,7 @@ class AnalyticsPage(ScrollPage):
         if count:
             average = (total_received + total_sent) / count
             self.insight_label.setText(
-                f"Средний оборот одной операции: {format_nvc(average)}. "
-                "Комиссии составляют "
-                f"{self._share(total_fees, total_received + total_sent)} "
-                "от общего оборота."
+                f"Средний оборот одной операции: {format_nvc(average)}."
             )
         else:
             self.insight_label.setText(
@@ -295,7 +300,6 @@ class AnalyticsPage(ScrollPage):
                 "чтобы увидеть закономерности."
             )
 
-    @staticmethod
     def _share(part: float, whole: float) -> str:
         """Return a small percentage string without a division by zero."""
         if whole <= 0:
