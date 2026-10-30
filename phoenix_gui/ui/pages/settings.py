@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -46,6 +47,12 @@ from ...ui.widgets.theme import (
     customize_theme,
 )
 from .base import ScrollPage
+
+REPOSITORY_URL = "https://github.com/Y-deva/phoenix_rpc"
+DEVELOPERS = (
+    ("FurryDrag0n", "https://github.com/FurryDrag0n"),
+    ("Y-deva", "https://github.com/Y-deva"),
+)
 
 VERBOSITY_HINTS = {
     0: "Только главное: суммы, статусы и основные действия.",
@@ -88,6 +95,7 @@ class SettingsPage(ScrollPage):
         self._build_sound()
         self._build_connection()
         self._build_daemon()
+        self._build_developers()
         self._build_about()
         self.add_stretch()
 
@@ -607,6 +615,59 @@ class SettingsPage(ScrollPage):
         hint.setObjectName("HintText")
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+    def _build_developers(self) -> None:
+        """Repository and developer contact links."""
+        card, form = self._section("Разработчики", "Исходный код и контакты команды")
+        self.developer_buttons: list[QPushButton] = []
+        links = (("Репозиторий", "Y-deva/phoenix_rpc", REPOSITORY_URL),) + tuple(
+            ("Разработчик", name, url) for name, url in DEVELOPERS
+        )
+        for role, title_text, url in links:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
+            glyph = QLabel()
+            glyph.setPixmap(
+                icon("link", self.tokens.get("accent", "#FF8A3D"), 16).pixmap(16, 16)
+            )
+            glyph.setFixedSize(18, 18)
+            row_layout.addWidget(glyph)
+            text_column = QVBoxLayout()
+            text_column.setSpacing(1)
+            title = QLabel(title_text)
+            title.setObjectName("MonoStrong")
+            address = QLabel(url.removeprefix("https://"))
+            address.setObjectName("Muted")
+            address.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            text_column.addWidget(title)
+            text_column.addWidget(address)
+            row_layout.addLayout(text_column, 1)
+            open_button = QPushButton("Открыть")
+            open_button.setObjectName("GhostButton")
+            open_button.setIcon(icon("link", self.tokens.get("accent", "#FF8A3D"), 15))
+            open_button.setToolTip(url)
+            open_button.setProperty("url", url)
+            open_button.clicked.connect(
+                lambda _checked=False, target=url: self._open_external(target)
+            )
+            row_layout.addWidget(open_button)
+            self.developer_buttons.append(open_button)
+            form.addRow(role, row)
+        hint = QLabel("Ссылки открываются в системном браузере.")
+        hint.setObjectName("HintText")
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+
+    def _open_external(self, url: str) -> None:
+        """Open a developer link in the default browser."""
+        if QDesktopServices.openUrl(QUrl(url)):
+            self.statusMessage.emit(self.tr_text("Ссылка открыта в браузере"), 2500)
+        else:
+            self.statusMessage.emit(self.tr_text("Не удалось открыть ссылку"), 4000)
 
     def _build_about(self) -> None:
         """Project paths, about dialog and reset."""

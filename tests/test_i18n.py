@@ -26,6 +26,7 @@ def test_catalog_lookup_and_english_fallback(qapp, tmp_path: Path) -> None:
     assert manager.tr("Показано 3 из 5 операций.") == "3 von 5 Transaktionen angezeigt."
     # A key absent from German still resolves through the English catalog.
     assert manager.tr("Очистить") == "Clear"
+    assert manager.tr("Разработчики") == "Entwickler"
     assert manager.tr("Неизвестная строка") == "Неизвестная строка"
 
 

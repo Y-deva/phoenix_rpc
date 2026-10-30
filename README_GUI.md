@@ -232,3 +232,14 @@ QT_QPA_PLATFORM=offscreen pytest
   по HTTP на loopback-адрес;
 - подпись и выбор входов выполняет `main.py`; GUI лишь формирует запрос;
 - медиафон читается только с локального диска и не загружается в сеть.
+
+
+## Разработчики
+
+- Репозиторий: [Y-deva/phoenix_rpc](https://github.com/Y-deva/phoenix_rpc)
+- [FurryDrag0n](https://github.com/FurryDrag0n)
+- [Y-deva](https://github.com/Y-deva)
+
+![Раздел разработчиков](docs/screenshots/contacts.png)
+
+Ссылки открываются из раздела `Настройки` -> `Разработчики`.

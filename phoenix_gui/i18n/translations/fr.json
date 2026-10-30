@@ -260,7 +260,19 @@
     "Дождитесь подтверждения поступлений или обновите список.": "Attendez les confirmations ou actualisez la liste.",
     "Отметьте входы вручную для ручной отправки.": "Marquez les entrées manuellement pour une dépense manuelle.",
     "Скрыть баланс": "Masquer le solde",
-    "Показать баланс": "Afficher le solde"
+    "Показать баланс": "Afficher le solde",
+    "Разработчики": "Développeurs",
+    "Исходный код и контакты": "Code source et contacts",
+    "Исходный код и контакты команды": "Code source et contacts de l'équipe",
+    "Репозиторий": "Dépôt",
+    "Разработчик": "Développeur",
+    "Ссылки открываются в системном браузере.": "Les liens s'ouvrent dans le navigateur système.",
+    "Ссылка открыта в браузере": "Lien ouvert dans le navigateur",
+    "Не удалось открыть ссылку": "Impossible d'ouvrir le lien",
+    "Аргументы": "Arguments",
+    "Ожидание": "Délai",
+    "Прокси запускается отдельно: он запрашивает пароль хранилища ключей в терминале.": "Le proxy fonctionne séparément et demande le mot de passe du stockage de clés dans le terminal.",
+    "Пути проекта и сброс предпочтений": "Chemins du projet et réinitialisation des préférences"
   },
   "patterns": {
     "Доступно: (.+)": "Disponible : {0}",

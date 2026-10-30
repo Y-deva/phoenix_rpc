@@ -298,7 +298,19 @@
     "Вход": "Input",
     "Дождитесь подтверждения поступлений или обновите список.": "Wait for confirmations or refresh the list.",
     "Скрыть баланс": "Hide balance",
-    "Показать баланс": "Show balance"
+    "Показать баланс": "Show balance",
+    "Разработчики": "Developers",
+    "Исходный код и контакты": "Source code and contacts",
+    "Исходный код и контакты команды": "Source code and team contacts",
+    "Репозиторий": "Repository",
+    "Разработчик": "Developer",
+    "Ссылки открываются в системном браузере.": "Links open in your system browser.",
+    "Ссылка открыта в браузере": "Link opened in your browser",
+    "Не удалось открыть ссылку": "Could not open the link",
+    "Аргументы": "Arguments",
+    "Ожидание": "Timeout",
+    "Прокси запускается отдельно: он запрашивает пароль хранилища ключей в терминале.": "The proxy runs separately: it asks for the key store password in the terminal.",
+    "Пути проекта и сброс предпочтений": "Project paths and preference reset"
   },
   "patterns": {
     "Доступно: (.+)": "Available: {0}",

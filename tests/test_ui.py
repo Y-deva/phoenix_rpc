@@ -351,3 +351,18 @@ def test_privacy_state_round_trips_through_settings(settings):
     assert second.hidden is True
     second.set_hidden(False)
     assert settings.get("privacy/hidden") is False
+
+
+def test_developer_contact_links(window):
+    """The settings page exposes the repository and both developer profiles."""
+    window.navigate("settings")
+    page = window._pages["settings"]
+    urls = [button.property("url") for button in page.developer_buttons]
+    assert urls == [
+        "https://github.com/Y-deva/phoenix_rpc",
+        "https://github.com/FurryDrag0n",
+        "https://github.com/Y-deva",
+    ]
+    assert all(
+        button.toolTip() == button.property("url") for button in page.developer_buttons
+    )

@@ -23,3 +23,10 @@ python -m phoenix_gui --demo
 
 Install its lighter dependency set with `pip install -r requirements-gui.txt`.
 See [README_GUI.md](README_GUI.md) for screenshots, hotkeys and architecture notes.
+
+
+## Project links
+
+- Repository: [Y-deva/phoenix_rpc](https://github.com/Y-deva/phoenix_rpc)
+- [FurryDrag0n](https://github.com/FurryDrag0n)
+- [Y-deva](https://github.com/Y-deva)
