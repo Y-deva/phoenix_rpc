@@ -306,32 +306,39 @@ def test_coin_selection_survives_refresh(window, qtbot):
     assert states.count(Qt.CheckState.Checked) == 2
 
 
-def test_privacy_toggle_blurs_balances_and_statistics(window, qtbot):
-    """The eye button hides numeric data globally and restores it."""
+def test_privacy_toggle_covers_balances_and_statistics(window, qtbot):
+    """The eye button covers financial values with particle plaques."""
+    from phoenix_gui.ui.widgets.privacy import PrivacyCellDelegate
+
     window.navigate("overview")
     page = window.current_page
     qtbot.waitUntil(lambda: not page._refreshing, timeout=6000)
-    assert page.balance_label.graphicsEffect() is None
+    assert window.privacy.is_covered(page.balance_label) is False
     assert window.privacy.hidden is False
 
     page.privacy_button.click()
     qtbot.wait(80)
     assert window.privacy.hidden is True
-    assert page.balance_label.graphicsEffect() is not None
-    assert page.activity_chart.canvas.graphicsEffect() is not None
-    assert page.pending_card.value_label.graphicsEffect() is not None
+    assert window.privacy.is_covered(page.balance_label) is True
+    assert window.privacy.is_covered(page.activity_chart.canvas) is True
+    assert window.privacy.is_covered(page.pending_card.value_label) is True
+    assert window.privacy.is_covered(page.pending_card.caption_label) is False
     assert window.settings.get("privacy/hidden") is True
 
     window.navigate("transactions")
     qtbot.waitUntil(lambda: not window.current_page._refreshing, timeout=6000)
-    assert window.current_page.table.viewport().graphicsEffect() is not None
+    table = window.current_page.table
+    amount_delegate = table.itemDelegateForColumn(2)
+    assert isinstance(amount_delegate, PrivacyCellDelegate)
+    assert amount_delegate.hidden is True
+    assert not isinstance(table.itemDelegateForColumn(0), PrivacyCellDelegate)
 
     window.navigate("overview")
     page.privacy_button.click()
     qtbot.wait(80)
     assert window.privacy.hidden is False
-    assert page.balance_label.graphicsEffect() is None
-    assert window.current_page.activity_chart.canvas.graphicsEffect() is None
+    assert window.privacy.is_covered(page.balance_label) is False
+    assert window.privacy.is_covered(page.activity_chart.canvas) is False
 
 
 def test_privacy_state_round_trips_through_settings(settings):

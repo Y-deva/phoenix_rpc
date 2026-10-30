@@ -87,6 +87,8 @@ class TransactionRow(QFrame):
         self.amount_label.setTextInteractionFlags(
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
+        # Fixed width keeps the privacy plaque independent of the amount length.
+        self.amount_label.setFixedWidth(150)
         layout.addWidget(self.amount_label)
 
     def _tr(self, text: str) -> str:

@@ -218,8 +218,8 @@ class ReceivePage(ScrollPage):
             self.balance_row.value_label,
             self.utxo_row.value_label,
             self.tx_row.value_label,
-            self.table.viewport(),
         )
+        self.protect_table(self.table, [2])
         return card
 
     def refresh(self) -> None:

@@ -66,6 +66,11 @@ class BasePage(QWidget):
         if self.context.privacy is not None:
             self.context.privacy.register(*widgets, radius=radius)
 
+    def protect_table(self, table, columns) -> None:
+        """Cover amount columns while keeping dates, types and labels readable."""
+        if self.context.privacy is not None:
+            self.context.privacy.register_table(table, columns)
+
     @property
     def tokens(self) -> dict[str, str]:
         """Current theme tokens."""

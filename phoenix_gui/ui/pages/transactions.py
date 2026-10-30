@@ -178,8 +178,8 @@ class TransactionsPage(BasePage):
             self.received_pill,
             self.sent_pill,
             self.count_pill,
-            self.table.viewport(),
         )
+        self.protect_table(self.table, [2])
 
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self._export_csv)
 

@@ -113,8 +113,8 @@ class SendPage(ScrollPage):
             self.summary_amount.value_label,
             self.summary_change.value_label,
             self.summary_inputs.value_label,
-            self.coin_table.viewport(),
         )
+        self.protect_table(self.coin_table, [3])
 
         self._switch_mode("simple")
 

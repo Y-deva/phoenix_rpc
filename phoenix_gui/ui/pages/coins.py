@@ -155,8 +155,8 @@ class CoinsPage(BasePage):
             self.available_pill,
             self.selected_pill,
             self.count_pill,
-            self.table.viewport(),
         )
+        self.protect_table(self.table, [1])
 
         self.footer = QLabel("")
         self.footer.setObjectName("Muted")

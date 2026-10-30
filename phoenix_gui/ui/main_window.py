@@ -100,7 +100,7 @@ class MainWindow(QMainWindow):
         self.themes = themes
         self.demo = demo
         self.translations = TranslationManager(settings, self)
-        self.privacy = PrivacyManager(settings, self)
+        self.privacy = PrivacyManager(settings, themes, self)
         self.context = PageContext(
             service=service,
             settings=settings,
@@ -829,6 +829,7 @@ class MainWindow(QMainWindow):
         self._update_nav_icons()
         if hasattr(self, "tray"):
             self.tray.setIcon(app_icon(theme))
+        self.privacy.refresh_theme()
         for page in self._pages.values():
             if hasattr(page, "apply_theme"):
                 page.apply_theme()
