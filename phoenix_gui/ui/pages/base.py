@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QFrame, QMessageBox, QScrollArea, QVBoxLayout, QWidget
 
 from ...core.config import ProjectConfig
 from ...core.errors import humanize_error
@@ -115,6 +115,30 @@ class BasePage(QWidget):
         """Report an error without breaking the page."""
         text = error if isinstance(error, str) else humanize_error(error)
         self.errorRaised.emit(text)
+
+    def ask(
+        self,
+        title: str,
+        message: str,
+        on_accept,
+        accept_text: str = "Продолжить",
+        danger: bool = False,
+    ) -> None:
+        """Ask for confirmation without leaving the main window."""
+        host = self.window()
+        confirm = getattr(host, "confirm", None)
+        if callable(confirm):
+            confirm(title, message, on_accept, accept_text, danger)
+            return
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            on_accept()
 
     def format_value(self, value: Any) -> str:
         """Small shortcut used by table builders."""

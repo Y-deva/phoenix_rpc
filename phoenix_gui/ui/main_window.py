@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal
@@ -28,9 +29,11 @@ from ..core.daemon import STATE_RUNNING, DaemonProcess
 from ..core.proxy import ProxyProcess
 from ..core.errors import humanize_error
 from ..core.formatting import format_int, format_percent
+from ..core.logs import clean_output
 from ..core.media import MediaBackdrop
 from ..core.sounds import SoundPlayer
 from ..core.sync import SyncStatus, build_sync_status, load_parser_progress
+from ..core.tasks import run_async
 from ..i18n import SOURCE_LANGUAGE, TranslationManager
 from ..rpc.client import RPCClient, RPCConnectionError
 from ..rpc.service import WalletService
@@ -45,6 +48,7 @@ from .pages.base import PageContext
 from .widgets.privacy import PrivacyManager
 from .pages.coins import CoinsPage
 from .pages.console import ConsolePage
+from .pages.logs import LogsPage
 from .pages.overview import OverviewPage
 from .pages.receive import ReceivePage
 from .pages.send import SendPage
@@ -55,8 +59,11 @@ from .widgets.card import Pill
 from .widgets.animations import Motion
 from .widgets.icons import app_icon, brand_logo, brand_mark, icon, nav_icon
 from .widgets.progress import Spinner
+from .widgets.sheet import AboutSheet, ConfirmSheet, SheetHost
 from .widgets.theme import ThemeManager
 from .widgets.toast import ToastManager
+
+LOGGER = logging.getLogger("phoenix")
 
 PAGE_CLASSES = (
     OverviewPage,
@@ -67,6 +74,7 @@ PAGE_CLASSES = (
     StoragePage,
     AnalyticsPage,
     ConsolePage,
+    LogsPage,
     SettingsPage,
 )
 
@@ -79,6 +87,7 @@ NAV_META: tuple[tuple[str, str, str], ...] = (
     ("storage", "Хранилище", "file"),
     ("analytics", "Аналитика", "chart"),
     ("console", "Консоль", "terminal"),
+    ("logs", "Журнал", "file"),
     ("settings", "Настройки", "settings"),
 )
 
@@ -131,6 +140,7 @@ class MainWindow(QMainWindow):
         self._setup_window()
         self._motion = Motion(settings, self)
         self._build_shell()
+        self.sheet_host = SheetHost(self.backdrop)
         self._build_pages()
         self._build_daemon()
         self._build_proxy()
@@ -295,7 +305,9 @@ class MainWindow(QMainWindow):
             button.setCheckable(True)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setIconSize(QSize(18, 18))
-            button.setToolTip(f"Перейти: {text} (Alt+{len(self._nav_buttons) + 1})")
+            position = len(self._nav_buttons) + 1
+            hint = f"Alt+{position}" if position <= 9 else "Ctrl+,"
+            button.setToolTip(f"Перейти: {text} ({hint})")
             button.clicked.connect(
                 lambda _checked=False, key=page_id: self.navigate(key)
             )
@@ -440,6 +452,12 @@ class MainWindow(QMainWindow):
             else "overview"
         )
 
+    @staticmethod
+    def _log_backend(source: str, chunk: str) -> None:
+        """Write process output to the rotating application log."""
+        for line in clean_output(chunk):
+            LOGGER.info("%s | %s", source, line)
+
     # ------------------------------------------------------------------
     # Backend control center
     # ------------------------------------------------------------------
@@ -453,15 +471,56 @@ class MainWindow(QMainWindow):
         """Return the proxy controller used by this window."""
         return self._proxy
 
-    def open_connection_dialog(self) -> None:
-        """Open the non-modal server control center."""
-        if self._connection_dialog is None:
-            self._connection_dialog = ConnectionDialog(self, self)
+    def show_sheet(self, widget: QWidget, on_closed=None) -> None:
+        """Show an application dialog inside the main window."""
         if self.translations.language != SOURCE_LANGUAGE:
-            self.translations.translate_tree(self._connection_dialog)
-        self._connection_dialog.show()
-        self._connection_dialog.raise_()
-        self._connection_dialog.activateWindow()
+            self.translations.translate_tree(widget)
+        self.sheet_host.show_sheet(widget, on_closed)
+
+    def close_sheet(self) -> None:
+        """Close the embedded dialog, if one is open."""
+        self.sheet_host.close_sheet()
+
+    def show_about(self) -> None:
+        """Show product information inside the main window."""
+        self.show_sheet(AboutSheet(parent=self))
+
+    def confirm(
+        self,
+        title: str,
+        message: str,
+        on_accept,
+        accept_text: str = "Продолжить",
+        danger: bool = False,
+    ) -> None:
+        """Ask for confirmation inside the main window."""
+        sheet = ConfirmSheet(
+            title,
+            message,
+            accept_text=accept_text,
+            danger=danger,
+            parent=self,
+        )
+
+        def accepted() -> None:
+            self.close_sheet()
+            on_accept()
+
+        sheet.confirmed.connect(accepted)
+        self.show_sheet(sheet)
+
+    def open_connection_dialog(self) -> None:
+        """Open the server control center inside the main window."""
+        if self._connection_dialog is not None:
+            return
+        dialog = ConnectionDialog(self, self)
+        self._connection_dialog = dialog
+        if self.translations.language != SOURCE_LANGUAGE:
+            self.translations.translate_tree(dialog)
+        self.show_sheet(
+            dialog,
+            on_closed=lambda: setattr(self, "_connection_dialog", None),
+        )
 
     def start_daemon_backend(self) -> None:
         """Start the daemon from the control center."""
@@ -473,6 +532,32 @@ class MainWindow(QMainWindow):
     def restart_daemon_backend(self) -> None:
         """Restart the daemon from the control center."""
         self._restart_daemon()
+
+    def stop_daemon_backend(self) -> None:
+        """Stop the daemon, asking first for an externally started node."""
+        if self.demo or self._daemon is None:
+            return
+        if self._daemon.owned:
+            self._daemon.stop()
+            return
+        self.confirm(
+            "Остановить узел",
+            "Узел запущен вне этого окна. После остановки кошелек потеряет "
+            "соединение с сетью, пока узел не будет запущен снова.",
+            self._stop_external_daemon,
+            "Остановить",
+            True,
+        )
+
+    def _stop_external_daemon(self) -> None:
+        """Send the raw stop command to an externally managed daemon."""
+        run_async(
+            self.service.call,
+            lambda _result: self.toast.info("Команда остановки узла отправлена"),
+            lambda error: self.toast.error(humanize_error(error)),
+            None,
+            "stop",
+        )
 
     def start_proxy_backend(self) -> None:
         """Start the proxy from the control center."""
@@ -511,6 +596,8 @@ class MainWindow(QMainWindow):
             return
         self._proxy = ProxyProcess(self.settings, self.project, self)
         self._proxy.stateChanged.connect(self._on_proxy_state)
+        self._proxy.output.connect(lambda text: self._log_backend("proxy", text))
+        self._proxy.failed.connect(lambda message: LOGGER.error("proxy: %s", message))
         self._proxy.ready.connect(self._on_proxy_ready)
         self._proxy.failed.connect(self._on_proxy_failed)
         self._proxy.stopped.connect(lambda _code: self._check_connection())
@@ -527,6 +614,10 @@ class MainWindow(QMainWindow):
             return
         self._daemon = DaemonProcess(self.settings, self.project, self)
         self._daemon.stateChanged.connect(self._on_daemon_state)
+        self._daemon.output.connect(lambda text: self._log_backend("novacoind", text))
+        self._daemon.failed.connect(
+            lambda message: LOGGER.error("novacoind: %s", message)
+        )
         self._daemon.ready.connect(self._on_daemon_ready)
         self._daemon.failed.connect(self._on_daemon_failed)
         self._daemon.stopped.connect(lambda _code: self._check_connection())
@@ -887,16 +978,21 @@ class MainWindow(QMainWindow):
         """Return the encrypted key-store path for this checkout."""
         return self.project.root / "keypair.bin"
 
-    def _ensure_wallet_password(self) -> bool:
-        """Prompt once per session for the key-store password."""
+    def _ensure_wallet_password(self, on_ready) -> None:
+        """Ask for the key-store password in an embedded sheet."""
         if self._wallet_password:
-            return True
+            on_ready(True)
+            return
         create = not self._wallet_file().is_file()
         dialog = WalletPasswordDialog(create=create, parent=self)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return False
-        self._wallet_password = dialog.password_value()
-        return bool(self._wallet_password)
+
+        def finished(code: int) -> None:
+            if code == QDialog.DialogCode.Accepted:
+                self._wallet_password = dialog.password_value()
+            on_ready(bool(self._wallet_password))
+
+        dialog.finished.connect(finished)
+        self.show_sheet(dialog)
 
     def _start_proxy(self, manual: bool = True) -> None:
         """Start the local proxy from the GUI, asking for its password."""
@@ -913,12 +1009,30 @@ class MainWindow(QMainWindow):
             if manual:
                 self.toast.info("Подключение к уже запущенному прокси")
             return
-        if not self._ensure_wallet_password():
-            self._pages["settings"].set_proxy_status("Запуск отменен")
+        if not self._wallet_password:
+            self._ensure_wallet_password(
+                lambda ready: (
+                    self._launch_proxy(manual) if ready else self._cancel_proxy_launch()
+                )
+            )
+            return
+        self._launch_proxy(manual)
+
+    def _launch_proxy(self, manual: bool = True) -> None:
+        """Start the proxy once the key-store password is available."""
+        if self.demo or self._proxy is None:
+            return
+        if self._proxy.state in {"starting", "running"}:
+            if manual:
+                self.toast.info("Прокси уже запущен")
             return
         self._proxy.start(self._wallet_password)
         if manual:
             self.toast.info("Запуск локального прокси...")
+
+    def _cancel_proxy_launch(self) -> None:
+        """Report a cancelled password prompt."""
+        self._pages["settings"].set_proxy_status("Запуск отменен")
 
     def _maybe_start_proxy(self) -> None:
         """Autostart the proxy after the daemon has been launched."""
@@ -948,8 +1062,16 @@ class MainWindow(QMainWindow):
             self._start_proxy()
             return
         if not self._wallet_password:
-            if not self._ensure_wallet_password():
-                return
+            self._ensure_wallet_password(
+                lambda ready: self._finish_proxy_restart() if ready else None
+            )
+            return
+        self._finish_proxy_restart()
+
+    def _finish_proxy_restart(self) -> None:
+        """Restart the proxy after the password is available."""
+        if self._proxy is None:
+            return
         self._proxy.restart(self._wallet_password)
         self.toast.info("Перезапуск прокси...")
 
@@ -1058,7 +1180,8 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dialog.completed.connect(self._on_migration_completed)
-        dialog.exec()
+        dialog.completed.connect(self.close_sheet)
+        self.show_sheet(dialog)
 
     def _on_migration_completed(self) -> None:
         """Refresh wallet views after a successful legacy sweep."""
@@ -1076,7 +1199,7 @@ class MainWindow(QMainWindow):
         dialog = TxDetailsDialog(
             transaction, dict(self.themes.tokens), self.settings.verbosity, self
         )
-        dialog.exec()
+        self.show_sheet(dialog)
 
     def _on_coins_send_requested(self, _utxos: object) -> None:
         """Open the send page after choosing inputs in the coin table."""
@@ -1135,13 +1258,15 @@ class MainWindow(QMainWindow):
     def _bind_shortcuts(self) -> None:
         """Register global keyboard shortcuts."""
         for index, (page_id, _text, _icon) in enumerate(NAV_META, start=1):
-            shortcut = QShortcut(QKeySequence(f"Alt+{index}"), self)
-            shortcut.activated.connect(lambda key=page_id: self.navigate(key))
+            key = f"Alt+{index}" if index <= 9 else "Alt+0"
+            shortcut = QShortcut(QKeySequence(key), self)
+            shortcut.activated.connect(lambda target=page_id: self.navigate(target))
         self._shortcut("Ctrl+R", self.refresh_current)
         self._shortcut("F5", self.refresh_current)
         self._shortcut("Ctrl+Q", self._quit)
         self._shortcut("Ctrl+Shift+T", self.themes.cycle)
         self._shortcut("Ctrl+,", lambda: self.navigate("settings"))
+        self._shortcut("Ctrl+Shift+L", lambda: self.navigate("logs"))
         self._shortcut("Ctrl+Shift+S", self.open_connection_dialog)
         self._shortcut("F1", self._show_shortcuts)
 
@@ -1153,11 +1278,19 @@ class MainWindow(QMainWindow):
 
     def _show_shortcuts(self) -> None:
         """Open the keyboard shortcut reference."""
-        ShortcutsDialog(dict(self.themes.tokens), self).exec()
+        dialog = ShortcutsDialog(dict(self.themes.tokens), self)
+        self.show_sheet(dialog)
 
     # ------------------------------------------------------------------
     # Theme, geometry and shutdown
     # ------------------------------------------------------------------
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        """Keep the in-window sheet layer aligned with the window."""
+        super().resizeEvent(event)
+        host = getattr(self, "sheet_host", None)
+        if host is not None:
+            host.setGeometry(self.backdrop.rect())
+
     def _on_theme_changed(self, theme: object) -> None:
         """Recolor icons, brand mark and page-specific details."""
         self.setWindowIcon(app_icon(theme))

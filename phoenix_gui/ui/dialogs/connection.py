@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ...core.proxy import STATE_RUNNING, STATE_STARTING
+from ...core.tasks import run_async
 from ..widgets.card import Card, Pill, SectionHeader
 from ..widgets.icons import icon
 from ..widgets.theme import ThemeManager
@@ -39,11 +40,22 @@ class ConnectionDialog(QDialog):
         self.setMinimumSize(680, 540)
         self._build()
         self._connect_processes()
+        self._network_task = False
         self._timer = QTimer(self)
         self._timer.setInterval(700)
         self._timer.timeout.connect(self.refresh)
         self._timer.start()
+        self._network_timer = QTimer(self)
+        self._network_timer.setInterval(5000)
+        self._network_timer.timeout.connect(self._refresh_network)
+        self._network_timer.start()
         self.refresh()
+        QTimer.singleShot(200, self._refresh_network)
+
+    def showEvent(self, event: object) -> None:
+        """Refresh network statistics once the sheet is actually visible."""
+        super().showEvent(event)
+        QTimer.singleShot(250, self._refresh_network)
 
     # ------------------------------------------------------------------
     # Construction
@@ -83,8 +95,12 @@ class ConnectionDialog(QDialog):
         self.daemon_start.clicked.connect(self.host.start_daemon_backend)
         self.daemon_restart = self._button("Перезапустить", "GhostButton")
         self.daemon_restart.clicked.connect(self.host.restart_daemon_backend)
+        self.daemon_stop = self._button("Остановить", "GhostButton")
+        self.daemon_stop.setToolTip("Остановить узел после подтверждения")
+        self.daemon_stop.clicked.connect(self.host.stop_daemon_backend)
         daemon_actions = QHBoxLayout()
         daemon_actions.addWidget(self.daemon_start)
+        daemon_actions.addWidget(self.daemon_stop)
         daemon_actions.addWidget(self.daemon_restart)
         daemon_actions.addStretch(1)
         daemon_card.layout().addLayout(daemon_actions)
@@ -107,6 +123,36 @@ class ConnectionDialog(QDialog):
         cards.addWidget(proxy_card, 1)
         root.addLayout(cards)
 
+        network_card = Card(padding=12, spacing=6)
+        network_header = SectionHeader(
+            "Состояние сети",
+            "Краткая сводка узла; подробные команды доступны в консоли.",
+        )
+        network_card.layout().addWidget(network_header)
+        network_row = QHBoxLayout()
+        network_row.setSpacing(18)
+        self.network_values: dict[str, QLabel] = {}
+        for key, caption in (
+            ("blocks", "Высота"),
+            ("connections", "Соединения"),
+            ("difficulty", "Сложность"),
+            ("hashrate", "Хешрейт"),
+            ("mining", "Майнинг"),
+        ):
+            column = QVBoxLayout()
+            column.setSpacing(1)
+            name = QLabel(caption)
+            name.setObjectName("HintText")
+            value = QLabel("-")
+            value.setObjectName("StatValue")
+            column.addWidget(name)
+            column.addWidget(value)
+            self.network_values[key] = value
+            network_row.addLayout(column)
+        network_row.addStretch(1)
+        network_card.layout().addLayout(network_row)
+        root.addWidget(network_card)
+
         log_card = Card()
         log_header = SectionHeader(
             "Журнал процессов",
@@ -115,7 +161,7 @@ class ConnectionDialog(QDialog):
         log_card.layout().addWidget(log_header)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMinimumHeight(190)
+        self.log.setMinimumHeight(150)
         self.log.setMaximumBlockCount(1500)
         self.log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.log.setObjectName("ConsoleOutput")
@@ -210,15 +256,12 @@ class ConnectionDialog(QDialog):
             )
             self.daemon_start.setEnabled(False)
             self.daemon_restart.setEnabled(False)
+            self.daemon_stop.setEnabled(True)
         elif daemon is not None:
             text, level = self._state_presentation(daemon.state)
             self.daemon_pill.set_text(text)
             self.daemon_pill.set_level(level)
-            owner = (
-                self._tr("запущен этим окном")
-                if daemon.owned
-                else self._tr("внешний процесс или не запущен")
-            )
+            owner = self._owner_text(daemon)
             details = [owner]
             if daemon.binary is not None:
                 details.append(str(daemon.binary))
@@ -227,6 +270,9 @@ class ConnectionDialog(QDialog):
                 daemon.state not in {STATE_STARTING, STATE_RUNNING}
             )
             self.daemon_restart.setEnabled(daemon.state == STATE_RUNNING)
+            self.daemon_stop.setEnabled(
+                daemon.state == STATE_RUNNING and (daemon.owned or self.host.online)
+            )
         else:
             self.daemon_pill.set_text("Демо-режим")
             self.daemon_pill.set_level("accent")
@@ -235,17 +281,14 @@ class ConnectionDialog(QDialog):
             )
             self.daemon_start.setEnabled(False)
             self.daemon_restart.setEnabled(False)
+            self.daemon_stop.setEnabled(False)
 
         if proxy is not None:
             text, level = self._state_presentation(proxy.state)
             self.proxy_pill.set_text(text)
             self.proxy_pill.set_level(level)
             endpoint, _, _ = self.host.settings.effective_proxy()
-            owner = (
-                self._tr("запущен этим окном")
-                if proxy.owned
-                else self._tr("внешний процесс или не запущен")
-            )
+            owner = self._owner_text(proxy)
             self.proxy_detail.setText(f"{endpoint}\n{owner}")
             self.proxy_start.setEnabled(
                 proxy.state not in {STATE_STARTING, STATE_RUNNING}
@@ -280,6 +323,14 @@ class ConnectionDialog(QDialog):
         manager = getattr(self.host, "translations", None)
         return manager.tr(text) if manager is not None else text
 
+    def _owner_text(self, process: object) -> str:
+        """Describe whether a running backend belongs to this window."""
+        if getattr(process, "state", "") == STATE_RUNNING:
+            if getattr(process, "owned", False):
+                return self._tr("запущен этим окном")
+            return self._tr("работает вне этого окна")
+        return self._tr("внешний процесс или не запущен")
+
     def _state_presentation(self, state: str) -> tuple[str, str]:
         """Translate backend states into pill text and semantic level."""
         table = {
@@ -292,6 +343,65 @@ class ConnectionDialog(QDialog):
         }
         text, level = table.get(state, (state, "neutral"))
         return self._tr(text), level
+
+    def _refresh_network(self) -> None:
+        """Fetch node statistics without blocking the dialog."""
+        if self._network_task or not self.isVisible():
+            return
+        if getattr(self.host, "demo", False):
+            self._set_network({})
+            return
+        service = getattr(self.host, "service", None)
+        if service is None:
+            return
+        self._network_task = True
+
+        def done(snapshot: object) -> None:
+            self._network_task = False
+            if self.isVisible() and isinstance(snapshot, dict):
+                self._set_network(snapshot)
+
+        def failed(_error: object) -> None:
+            self._network_task = False
+
+        run_async(
+            service.node_snapshot,
+            done,
+            failed,
+            lambda: setattr(self, "_network_task", False),
+        )
+
+    def _set_network(self, snapshot: dict[str, object]) -> None:
+        """Update the compact node summary."""
+        if not snapshot:
+            for value in self.network_values.values():
+                value.setText("-")
+            return
+        blocks = snapshot.get("blocks")
+        connections = snapshot.get("connections")
+        difficulty = snapshot.get("difficulty")
+        hashrate = snapshot.get("hashrate")
+        self.network_values["blocks"].setText(
+            str(blocks) if blocks is not None else "-"
+        )
+        self.network_values["connections"].setText(
+            str(connections) if connections is not None else "-"
+        )
+        try:
+            difficulty_text = (
+                f"{float(difficulty):.6g}" if difficulty is not None else "-"
+            )
+        except (TypeError, ValueError):
+            difficulty_text = "-"
+        self.network_values["difficulty"].setText(difficulty_text)
+        try:
+            hashrate_text = f"{float(hashrate) / 1e9:.2f} GH/s" if hashrate else "-"
+        except (TypeError, ValueError):
+            hashrate_text = "-"
+        self.network_values["hashrate"].setText(hashrate_text)
+        self.network_values["mining"].setText(
+            self._tr("Да") if snapshot.get("mining") else self._tr("Нет")
+        )
 
     def _append(self, text: str) -> None:
         """Append process output without stealing focus."""

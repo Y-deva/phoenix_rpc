@@ -76,12 +76,23 @@ class QrCode(QWidget):
         painter.end()
 
     def _paint_matrix(self, painter: QPainter, target: QRectF) -> None:
-        """Paint the matrix or a placeholder."""
-        painter.fillRect(target, self._light)
+        """Paint the matrix or a compact placeholder."""
         if not self._matrix:
+            card = target.adjusted(10, 10, -10, -10)
+            painter.setPen(QColor("#E2E7EF"))
+            painter.setBrush(self._light)
+            painter.drawRoundedRect(card, 12, 12)
             painter.setPen(QColor("#748094"))
-            painter.drawText(target, Qt.AlignmentFlag.AlignCenter, "Нет данных")
+            font = painter.font()
+            font.setPointSizeF(10.5)
+            painter.setFont(font)
+            painter.drawText(
+                card.adjusted(22, 22, -22, -22),
+                Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap,
+                "QR-код появится после создания адреса",
+            )
             return
+        painter.fillRect(target, self._light)
         rows = len(self._matrix)
         columns = len(self._matrix[0]) if rows else 0
         if not rows or not columns:

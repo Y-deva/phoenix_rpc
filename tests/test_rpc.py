@@ -189,3 +189,80 @@ def test_service_pstore_calls():
         ("pload", ["b" * 64, "bin"]),
         ("pcancel", []),
     ]
+
+
+def test_available_addresses_merge_balances_and_imported_activity():
+    client = make_client(
+        {
+            "listaddresses": [
+                {"address": "2NKnown", "account": "Main", "created_at": 10}
+            ],
+            "listunspent": [
+                {
+                    "txid": "a" * 64,
+                    "vout": 0,
+                    "address": "2NKnown",
+                    "amount": 1.25,
+                    "confirmations": 3,
+                },
+                {
+                    "txid": "b" * 64,
+                    "vout": 1,
+                    "address": "2NImported",
+                    "amount": 2.5,
+                    "confirmations": 1,
+                },
+            ],
+            "listtransactions": [
+                {
+                    "txid": "a" * 64,
+                    "category": "receive",
+                    "amount": 1.25,
+                    "address": "2NKnown",
+                    "account": "Main",
+                    "confirmations": 3,
+                    "time": 40,
+                },
+                {
+                    "txid": "c" * 64,
+                    "category": "receive",
+                    "amount": 1,
+                    "address": "2NKnown",
+                    "account": "Main",
+                    "confirmations": 2,
+                    "time": 30,
+                },
+            ],
+        }
+    )
+    addresses = WalletService(client).available_addresses()
+    known = next(item for item in addresses if item.address == "2NKnown")
+    imported = next(item for item in addresses if item.address == "2NImported")
+    assert known.account == "Main"
+    assert known.balance == Decimal("1.25000000")
+    assert known.utxo_count == 1
+    assert known.tx_count == 2
+    assert known.created_at == 10
+    assert imported.balance == Decimal("2.50000000")
+    assert imported.utxo_count == 1
+    assert imported.tx_count == 0
+
+
+def test_node_snapshot_collects_mining_and_connections():
+    client = make_client(
+        {
+            "getinfo": {"blocks": 500, "connections": 7, "difficulty": 2.5},
+            "getmininginfo": {"networkhashps": 1500000000, "generate": True},
+            "getconnectioncount": 7,
+        }
+    )
+    snapshot = WalletService(client).node_snapshot()
+    assert snapshot == {
+        "blocks": 500,
+        "connections": 7,
+        "difficulty": Decimal("2.5"),
+        "hashrate": 1500000000,
+        "mining": True,
+        "errors": "",
+        "peers": 7,
+    }

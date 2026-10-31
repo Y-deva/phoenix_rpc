@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QWidget,
@@ -405,16 +404,17 @@ class StoragePage(ScrollPage):
         """Confirm and call pcancel."""
         if self._busy_cancel:
             return
-        answer = QMessageBox.question(
-            self,
+        self.ask(
             "Отменить pstore",
             "Удалить все неподтвержденные pstore-транзакции из очереди? "
             "Уже подтвержденные транзакции останутся в блокчейне.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self._do_cancel_pending,
+            "Отменить",
+            True,
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+
+    def _do_cancel_pending(self) -> None:
+        """Send pcancel after the embedded confirmation."""
         self._busy_cancel = True
         self.cancel_button.setEnabled(False)
         self.busyChanged.emit(True)

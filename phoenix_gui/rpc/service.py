@@ -114,6 +114,66 @@ def derive_addresses(
     return result
 
 
+def merge_address_activity(
+    addresses: Sequence[AddressInfo],
+    utxos: Iterable[Utxo],
+    transactions: Iterable[Transaction],
+) -> list[AddressInfo]:
+    """Attach per-address balances and activity to generated addresses."""
+    balances: dict[str, Decimal] = {}
+    utxo_counts: dict[str, int] = {}
+    tx_ids: dict[str, set[str]] = {}
+    accounts: dict[str, str] = {}
+    first_seen: dict[str, int] = {}
+    for utxo in utxos:
+        if not utxo.address:
+            continue
+        balances[utxo.address] = balances.get(utxo.address, Decimal("0")) + utxo.amount
+        utxo_counts[utxo.address] = utxo_counts.get(utxo.address, 0) + 1
+    for tx in transactions:
+        if not tx.address:
+            continue
+        tx_ids.setdefault(tx.address, set()).add(tx.txid)
+        if tx.account and tx.address not in accounts:
+            accounts[tx.address] = tx.account
+        if tx.timestamp:
+            first_seen[tx.address] = min(
+                first_seen.get(tx.address, tx.timestamp), tx.timestamp
+            )
+    known = {item.address for item in addresses}
+    merged: list[AddressInfo] = []
+    for item in addresses:
+        activity_tx = tx_ids.get(item.address, set())
+        merged.append(
+            AddressInfo(
+                address=item.address,
+                account=item.account or accounts.get(item.address, ""),
+                counter=item.counter,
+                created_at=item.created_at or first_seen.get(item.address, 0),
+                balance=balances.get(item.address, Decimal("0")).quantize(MONEY_PLACES),
+                utxo_count=utxo_counts.get(item.address, 0),
+                tx_count=len(activity_tx),
+                raw=item.raw,
+            )
+        )
+    for address in sorted(set(balances) | set(tx_ids)):
+        if address in known:
+            continue
+        activity_tx = tx_ids.get(address, set())
+        merged.append(
+            AddressInfo(
+                address=address,
+                account=accounts.get(address, ""),
+                created_at=first_seen.get(address, 0),
+                balance=balances.get(address, Decimal("0")).quantize(MONEY_PLACES),
+                utxo_count=utxo_counts.get(address, 0),
+                tx_count=len(activity_tx),
+            )
+        )
+    merged.sort(key=lambda item: (-item.balance, item.address))
+    return merged
+
+
 class WalletService:
     """High-level wallet API with typed results and optional fallbacks."""
 
@@ -129,6 +189,21 @@ class WalletService:
     def network_info(self) -> NetworkInfo:
         """Fetch general daemon status."""
         return NetworkInfo.from_rpc(self.client.call("getinfo"))
+
+    def node_snapshot(self) -> dict[str, object]:
+        """Collect the small, read-only node status shown in Server Center."""
+        info = self.network_info()
+        mining = self.client.call("getmininginfo") or {}
+        peers = self.client.call("getconnectioncount")
+        return {
+            "blocks": info.blocks,
+            "connections": info.connections,
+            "difficulty": info.difficulty,
+            "hashrate": mining.get("networkhashps", 0),
+            "mining": bool(mining.get("generate") or mining.get("mining")),
+            "errors": info.errors or info.warning,
+            "peers": peers,
+        }
 
     def chain_info(self) -> ChainInfo:
         """Fetch chain synchronization status.
@@ -291,12 +366,18 @@ class WalletService:
         return result if isinstance(result, dict) else {}
 
     def available_addresses(self) -> list[AddressInfo]:
-        """Return addresses, falling back to those derived from activity."""
+        """Return generated addresses enriched with balances and activity."""
         if self.addresses_supported is False:
             return derive_addresses(
                 self.list_unspent(), self.list_transactions(count=MAX_HISTORY)
             )
-        return self.list_addresses()
+        addresses = self.list_addresses()
+        try:
+            utxos = self.list_unspent()
+            history = self.list_transactions(count=MAX_HISTORY)
+        except RPCError:
+            return addresses
+        return merge_address_activity(addresses, utxos, history)
 
 
 def fee_amount(size_bytes: int, sat_per_byte: int) -> Decimal:

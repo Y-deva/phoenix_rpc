@@ -660,8 +660,23 @@ class SendPage(ScrollPage):
                 expert=self._mode == "expert",
                 parent=self,
             )
+            host = getattr(self.window(), "show_sheet", None)
+            if host is not None:
+                dialog.accepted.connect(
+                    lambda: self._start_send(address, plan, comment, mode)
+                )
+                host(dialog)
+                return
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
+        self._start_send(address, plan, comment, mode)
+
+    def _start_send(
+        self, address: str, plan: SendPlan, comment: str, mode: str
+    ) -> None:
+        """Run the send worker after confirmation."""
+        if self._sending:
+            return
         self._set_sending(True)
         run_async(
             lambda: self._send_worker(address, plan, comment, mode),

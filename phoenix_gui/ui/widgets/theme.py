@@ -463,6 +463,18 @@ QMainWindow, QDialog {
     background: @bg@;
 }
 
+QWidget#SheetLayer {
+    background: transparent;
+}
+QFrame#SheetScrim {
+    background: rgba(3, 5, 9, 125);
+    border-radius: 0px;
+}
+QFrame#SheetPanel {
+    background: @surface@;
+    border: 1px solid @border@;
+    border-radius: 16px;
+}
 QWidget#RootBackdrop, QWidget#Content, QWidget#Page, QStackedWidget {
     background: transparent;
 }

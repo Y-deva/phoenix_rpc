@@ -17,7 +17,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -36,7 +35,7 @@ from ...ui.widgets.fields import (
     PathField,
     SegmentedControl,
 )
-from ...ui.widgets.icons import brand_logo, icon
+from ...ui.widgets.icons import icon
 from ...ui.widgets.progress import Spinner
 from ...ui.widgets.theme import (
     CUSTOM_TOKENS,
@@ -1181,34 +1180,26 @@ class SettingsPage(ScrollPage):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.config.root)))
 
     def _show_about(self) -> None:
-        """Display a short about dialog."""
-        from ... import __app_name__, __version__
-
-        box = QMessageBox(self)
-        box.setWindowTitle("О программе")
-        box.setText(
-            f"{__app_name__} {__version__}\n\n"
-            "Графический интерфейс кошелька Phoenix на базе NovaCoin.\n"
-            "Демон novacoind запускается под капотом, "
-            "обмен идет через локальный прокси."
-        )
-        logo = brand_logo(72)
-        if not logo.isNull():
-            box.setIconPixmap(logo)
-        box.exec()
+        """Show product information in the shared sheet host."""
+        host = getattr(self.window(), "show_about", None)
+        if callable(host):
+            host()
+            return
+        self.notify("Phoenix Wallet - графический кошелек NovaCoin", 4000)
 
     def _reset_settings(self) -> None:
-        """Restore defaults after an explicit confirmation."""
-        answer = QMessageBox.question(
-            self,
+        """Restore defaults after an in-window confirmation."""
+        self.ask(
             "Сброс настроек",
-            "Вернуть все предпочтения к значениям по умолчанию?\n"
+            "Вернуть все предпочтения к значениям по умолчанию? "
             "Данные кошелька и история операций не затрагиваются.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self._do_reset_settings,
+            "Сбросить",
+            True,
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+
+    def _do_reset_settings(self) -> None:
+        """Apply the reset after confirmation."""
         self.settings.reset_defaults()
         self.settings.bootstrap(self.config, force=True)
         self._sync_from_settings()

@@ -436,7 +436,11 @@ class TransactionsPage(BasePage):
         dialog = TxDetailsDialog(
             transaction, dict(self.tokens), self.settings.verbosity, self
         )
-        dialog.exec()
+        host = getattr(self.window(), "show_sheet", None)
+        if callable(host):
+            self.window().show_sheet(dialog)
+        else:
+            dialog.exec()
 
     def _context_menu(self, position: object) -> None:
         """Offer copy and detail actions for the clicked row."""

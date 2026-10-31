@@ -5,9 +5,10 @@ from __future__ import annotations
 from decimal import Decimal
 from pathlib import Path
 
-from PyQt6.QtCore import QStandardPaths, Qt
+from PyQt6.QtCore import QStandardPaths, QTimer, Qt
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -40,6 +41,8 @@ class ReceivePage(ScrollPage):
         self._addresses: list[AddressInfo] = []
         self._current_address = ""
         self._generating = False
+        self._auto_attempted = False
+        self._pending_account = ""
         self._build_ui()
         self.apply_theme()
 
@@ -111,25 +114,48 @@ class ReceivePage(ScrollPage):
         card.add(self.copy_button)
 
         card.add(QLabel(""))
-        account_label = QLabel("Аккаунт")
+        account_label = QLabel("Счёт получения")
         account_label.setObjectName("Muted")
         card.add(account_label)
+        self.account_filter = QComboBox()
+        self.account_filter.setToolTip(
+            "Счёт группирует адреса. Выберите счёт, чтобы получать только на него."
+        )
+        self.account_filter.setMinimumWidth(220)
+        self.account_filter.setMaximumWidth(320)
+        self.account_filter.currentIndexChanged.connect(self._on_account_filter)
+        card.add(self.account_filter)
+
+        new_account_row = QHBoxLayout()
+        new_account_row.setSpacing(8)
         self.account_input = QLineEdit()
-        self.account_input.setPlaceholderText("Основной")
-        self.account_input.setToolTip("Необязательная метка для группировки адресов")
+        self.account_input.setPlaceholderText("Название нового счёта")
+        self.account_input.setToolTip("Создайте отдельный счёт для нового назначения")
         self.account_input.setClearButtonEnabled(True)
-        self.account_input.setMaximumWidth(280)
-        card.add(self.account_input)
+        self.account_input.setMaxLength(48)
+        self.account_input.returnPressed.connect(self._create_account)
+        self.create_account_button = QPushButton("Создать счёт")
+        self.create_account_button.setObjectName("GhostButton")
+        self.create_account_button.setIcon(
+            icon("plus", self.tokens.get("muted", "#A7B1C2"), 16)
+        )
+        self.create_account_button.setToolTip("Создать новый счёт и первый адрес в нём")
+        self.create_account_button.clicked.connect(self._create_account)
+        new_account_row.addWidget(self.account_input, 1)
+        new_account_row.addWidget(self.create_account_button)
+        card.add_layout(new_account_row)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
         self.generate_button = QPushButton("Новый адрес")
-        self.generate_button.setObjectName("GhostButton")
+        self.generate_button.setObjectName("AccentButton")
         self.generate_button.setIcon(
-            icon("plus", self.tokens.get("muted", "#A7B1C2"), 16)
+            icon("plus", self.tokens.get("accent_text", "#1B0D04"), 16)
         )
-        self.generate_button.setToolTip("Создать новый адрес в текущем аккаунте")
-        self.generate_button.clicked.connect(self._generate)
+        self.generate_button.setToolTip(
+            "Создать новый адрес в выбранном или новом счёте"
+        )
+        self.generate_button.clicked.connect(lambda: self._generate())
         self.refresh_button = QPushButton("Обновить")
         self.refresh_button.setObjectName("GhostButton")
         self.refresh_button.setIcon(
@@ -244,8 +270,17 @@ class ReceivePage(ScrollPage):
                 self._current_address = addresses[0].address
         self._render_address()
         self._render_table()
+        self._sync_accounts()
         self.status_pill.set_text(f"Адресов: {len(addresses)}")
         self.status_pill.set_level("success" if addresses else "warning")
+        if (
+            not addresses
+            and not self._auto_attempted
+            and not self._generating
+            and self.service is not None
+        ):
+            self._auto_attempted = True
+            QTimer.singleShot(250, lambda: self._generate("Основной"))
 
     def _render_table(self) -> None:
         """Rebuild rows while preserving the filter."""
@@ -346,9 +381,67 @@ class ReceivePage(ScrollPage):
         self.status_pill.set_level("success")
         self.settings.last_receive_address = address
 
+    def _accounts(self) -> list[str]:
+        """Return account names in stable display order."""
+        names = {item.account or "Основной" for item in self._addresses}
+        return sorted(names, key=lambda value: (value != "Основной", value.lower()))
+
+    def _sync_accounts(self) -> None:
+        """Refresh the account selector without losing the current choice."""
+        selected = self.account_filter.currentData() or ""
+        accounts = self._accounts()
+        self.account_filter.blockSignals(True)
+        self.account_filter.clear()
+        self.account_filter.addItem(self.tr_text("Все счета"), "")
+        for account in accounts:
+            self.account_filter.addItem(self.tr_text(account), account)
+        index = self.account_filter.findData(selected)
+        self.account_filter.setCurrentIndex(max(0, index))
+        self.account_filter.blockSignals(False)
+
+    def _on_account_filter(self, _index: int) -> None:
+        """Filter the address table by account and pick an address from it."""
+        account = self.account_filter.currentData() or ""
+        query = self.search.text()
+        self.table.filter_rows(f"{query} {account}".strip())
+        if account:
+            match = next(
+                (
+                    item
+                    for item in self._addresses
+                    if (item.account or "Основной") == account
+                ),
+                None,
+            )
+            if match is not None:
+                self._current_address = match.address
+                self._render_address()
+
+    def _create_account(self) -> None:
+        """Create a named account with its first address."""
+        account = self.account_input.text().strip()
+        if not account:
+            self.notify("Введите название счёта", 3000)
+            self.account_input.setFocus()
+            return
+        if any(ord(char) < 32 for char in account):
+            self.notify("Название счёта содержит недопустимые символы", 3500)
+            return
+        if account in self._accounts():
+            self._pending_account = account
+            self.account_filter.setCurrentIndex(self.account_filter.findData(account))
+            self.notify("Такой счёт уже существует", 3000)
+            return
+        self._pending_account = account
+        self._generate(account)
+
     def _filter_addresses(self, _text: str) -> None:
-        """Filter table rows by the search box."""
-        self.table.filter_rows(self.search.text())
+        """Filter table rows by the search box and the selected account."""
+        query = self.search.text()
+        account = self.account_filter.currentData()
+        if account:
+            query = f"{query} {account}".strip()
+        self.table.filter_rows(query)
 
     def _on_selection_changed(self) -> None:
         """Show a hovered or keyboard-selected address in the details card."""
@@ -389,13 +482,17 @@ class ReceivePage(ScrollPage):
         """Copy the displayed address."""
         self._select_and_copy(self._current_address)
 
-    def _generate(self) -> None:
+    def _generate(self, account: str | None = None) -> None:
         """Ask the proxy for a fresh deterministic address."""
         if self._generating:
             return
-        account = self.account_input.text().strip()
+        if account is None:
+            account = self._pending_account or self.account_filter.currentData() or ""
+        account = account.strip()
+        self._pending_account = account
         self._generating = True
         self.generate_button.setEnabled(False)
+        self.create_account_button.setEnabled(False)
         self.generate_button.setText("Создание...")
         run_async(
             lambda: self.service.new_address(account),
@@ -411,7 +508,9 @@ class ReceivePage(ScrollPage):
             return
         self._current_address = address
         self.settings.last_receive_address = address
-        self.notify("Новый адрес создан", 4000)
+        if self._pending_account:
+            self.account_input.clear()
+        self.notify("Новый адрес и счёт готовы", 4000)
         self.refresh()
         self._render_address()
 
@@ -423,7 +522,9 @@ class ReceivePage(ScrollPage):
         """Restore the generate button."""
         self._generating = False
         self.generate_button.setEnabled(True)
+        self.create_account_button.setEnabled(True)
         self.generate_button.setText("Новый адрес")
+        self._pending_account = ""
 
     def _save_qr(self) -> None:
         """Save the current QR matrix as a PNG file."""

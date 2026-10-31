@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -147,6 +146,29 @@ class MigrationDialog(QDialog):
         self.result.setObjectName("HintText")
         self.result.setWordWrap(True)
         layout.addWidget(self.result)
+
+        self.confirm_panel = QFrame()
+        self.confirm_panel.setObjectName("SoftCard")
+        confirm_layout = QVBoxLayout(self.confirm_panel)
+        confirm_layout.setContentsMargins(14, 10, 14, 10)
+        confirm_layout.setSpacing(8)
+        self.confirm_label = QLabel("")
+        self.confirm_label.setObjectName("Text")
+        self.confirm_label.setWordWrap(True)
+        confirm_layout.addWidget(self.confirm_label)
+        confirm_actions = QHBoxLayout()
+        confirm_actions.addStretch(1)
+        self.confirm_cancel = QPushButton("Отмена")
+        self.confirm_cancel.setObjectName("GhostButton")
+        self.confirm_cancel.clicked.connect(self._hide_confirm)
+        self.confirm_send = QPushButton("Перевести")
+        self.confirm_send.setObjectName("AccentButton")
+        self.confirm_send.clicked.connect(self._do_sweep)
+        confirm_actions.addWidget(self.confirm_cancel)
+        confirm_actions.addWidget(self.confirm_send)
+        confirm_layout.addLayout(confirm_actions)
+        self.confirm_panel.setVisible(False)
+        layout.addWidget(self.confirm_panel)
 
         self.progress = TaskProgress()
         self.progress.setVisible(False)
@@ -312,16 +334,31 @@ class MigrationDialog(QDialog):
         if amount <= 0:
             self.result.setText("Недостаточно средств для вывода.")
             return
-        answer = QMessageBox.question(
-            self,
-            "Перевод в Phoenix",
-            f"Вывести {format_nvc(amount)} NVC на адрес\n{destination}?\n\n"
-            "Комиссия старого кошелька удерживается автоматически.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        self.confirm_label.setText(
+            f"Вывести {format_nvc(amount)} NVC на адрес {destination}? "
+            "Комиссия старого кошелька удерживается автоматически."
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        self.confirm_panel.setVisible(True)
+        self.confirm_send.setFocus()
+
+    def _hide_confirm(self) -> None:
+        """Hide the inline transfer confirmation."""
+        self.confirm_panel.setVisible(False)
+
+    def _do_sweep(self) -> None:
+        """Send the transfer after inline confirmation."""
+        if self._busy or self._report is None:
             return
+        try:
+            destination = validate_destination(self.destination.text(), self.project)
+        except ValueError as exc:
+            self.result.setText(str(exc))
+            return
+        amount = self._report.balance - Decimal("0.001")
+        if amount <= 0:
+            self.result.setText("Недостаточно средств для вывода.")
+            return
+        self.confirm_panel.setVisible(False)
         self._set_busy(True, "Отправка перевода...")
         run_async(
             lambda: sweep_all(self.project, destination),

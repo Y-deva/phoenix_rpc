@@ -311,7 +311,21 @@
     "Операция заняла слишком много времени. Проверьте соединение и повторите.": "Der Vorgang hat zu lange gedauert. Prüfen Sie die Verbindung und versuchen Sie es erneut.",
     "Соединение прервано. Проверьте сеть и повторите попытку.": "Die Verbindung wurde unterbrochen. Prüfen Sie das Netzwerk und versuchen Sie es erneut.",
     "Парсер": "Parser",
-    "Блоки": "Blöcke"
+    "Блоки": "Blöcke",
+    "Журнал": "Protokoll",
+    "События приложения, ошибки и диагностика без терминала": "Anwendungsereignisse, Fehler und Diagnose ohne Terminal",
+    "Все записи": "Alle Einträge",
+    "Ошибки": "Fehler",
+    "Предупреждения": "Warnungen",
+    "Выгрузить": "Exportieren",
+    "Очистить": "Löschen",
+    "События": "Ereignisse",
+    "Журнал пока пуст": "Das Protokoll ist leer",
+    "Все счета": "Alle Konten",
+    "Счёт": "Konto",
+    "Название нового счёта": "Name des neuen Kontos",
+    "Создать счёт": "Konto erstellen",
+    "Продолжить": "Weiter"
   },
   "patterns": {
     "Доступно: (.+)": "Verfügbar: {0}",
