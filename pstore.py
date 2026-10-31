@@ -467,7 +467,10 @@ def handle_pstore(params, rpc_config):
             print("[PSTORE] no anchor — building split")
             split_tx, anchor = _build_split(rpc_config, pubkey_hash, n_time)
             if split_tx is None:
-                raise RuntimeError("no suitable UTXO to split")
+                raise RuntimeError(
+                    "Нет подтвержденных средств для pstore. "
+                    "Пополните кошелек и дождитесь подтверждения входа."
+                )
             split_txid = split_tx["txid"]
             to_store.append(split_tx)
 

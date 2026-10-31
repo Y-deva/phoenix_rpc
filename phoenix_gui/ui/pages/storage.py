@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ...core.errors import humanize_error
 from ...core.formatting import format_bytes
 from ...core.tasks import run_async
 from ..widgets.card import Card
@@ -324,11 +325,12 @@ class StoragePage(ScrollPage):
 
     def _upload_failed(self, error: object) -> None:
         """Report an upload error without hiding the form."""
-        self.upload_status.setText(f"Ошибка: {error}")
+        message = humanize_error(error)
+        self.upload_status.setText(f"Ошибка: {message}")
         self.upload_status.setProperty("error", True)
         self._refresh_style(self.upload_status)
         self.upload_progress.finish("Ошибка")
-        self.errorRaised.emit(str(error))
+        self.errorRaised.emit(message)
 
     def _upload_finished(self) -> None:
         """Release upload controls."""

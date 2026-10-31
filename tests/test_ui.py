@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication, QLabel
 from phoenix_gui.core.formatting import shorten_txid
 from phoenix_gui.core.validation import address_from_hash
 from phoenix_gui.demo import DemoService
+from phoenix_gui.rpc.client import RPCError
 from phoenix_gui.ui.dialogs.confirm import ConfirmSendDialog
 from phoenix_gui.ui.dialogs.shortcuts import ShortcutsDialog
 from phoenix_gui.ui.dialogs.tx_details import TxDetailsDialog
@@ -451,3 +452,12 @@ def test_backend_watchdog_respects_manual_stop(window):
     window._watch_backends()
     assert daemon.started is False
     assert proxy.started is False
+
+
+def test_storage_upload_error_is_humanized(window):
+    """pstore insufficiency is explained instead of showing a raw RPC code."""
+    window.navigate("storage")
+    page = window.current_page
+    page._upload_failed(RPCError("no suitable UTXO to split", 400))
+    assert "подтвержденный вход" in page.upload_status.text()
+    assert "code 400" not in page.upload_status.text()
