@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from PyQt6.QtCore import QSize, QTimer, Qt, pyqtSignal
@@ -131,6 +132,12 @@ class MainWindow(QMainWindow):
         self._proxy: ProxyProcess | None = None
         self._connection_dialog: ConnectionDialog | None = None
         self._wallet_password = ""
+        self._proxy_prompt_denied = False
+        self._daemon_user_stopped = False
+        self._proxy_user_stopped = False
+        self._last_daemon_auto = 0.0
+        self._last_proxy_auto = 0.0
+        self._last_connection_check = 0.0
         self._sync: SyncStatus | None = None
         self._pages: dict[str, Any] = {}
         self._sounds = SoundPlayer(settings, self)
@@ -527,6 +534,7 @@ class MainWindow(QMainWindow):
         if self.demo or self._daemon is None:
             self.toast.info("В демо-режиме демон не запускается")
             return
+        self._daemon_user_stopped = False
         self._daemon.start()
 
     def restart_daemon_backend(self) -> None:
@@ -538,6 +546,7 @@ class MainWindow(QMainWindow):
         if self.demo or self._daemon is None:
             return
         if self._daemon.owned:
+            self._daemon_user_stopped = True
             self._daemon.stop()
             return
         self.confirm(
@@ -551,6 +560,7 @@ class MainWindow(QMainWindow):
 
     def _stop_external_daemon(self) -> None:
         """Send the raw stop command to an externally managed daemon."""
+        self._daemon_user_stopped = True
         run_async(
             self.service.call,
             lambda _result: self.toast.info("Команда остановки узла отправлена"),
@@ -561,6 +571,8 @@ class MainWindow(QMainWindow):
 
     def start_proxy_backend(self) -> None:
         """Start the proxy from the control center."""
+        self._proxy_prompt_denied = False
+        self._proxy_user_stopped = False
         self._start_proxy(manual=True)
 
     def stop_proxy_backend(self) -> None:
@@ -577,6 +589,9 @@ class MainWindow(QMainWindow):
 
     def start_all_backends(self) -> None:
         """Start both services in order, asking for the wallet password once."""
+        self._daemon_user_stopped = False
+        self._proxy_user_stopped = False
+        self._proxy_prompt_denied = False
         if self.demo:
             self.toast.info("В демо-режиме серверные процессы не нужны")
             return
@@ -1031,14 +1046,15 @@ class MainWindow(QMainWindow):
             self.toast.info("Запуск локального прокси...")
 
     def _cancel_proxy_launch(self) -> None:
-        """Report a cancelled password prompt."""
+        """Report a cancelled password prompt and stop auto-retrying it."""
+        self._proxy_prompt_denied = True
         self._pages["settings"].set_proxy_status("Запуск отменен")
 
     def _maybe_start_proxy(self) -> None:
         """Autostart the proxy after the daemon has been launched."""
         if self.demo or self._proxy is None:
             return
-        if self.settings.proxy_autostart:
+        if self.settings.proxy_autostart and not self._proxy_prompt_denied:
             self._start_proxy(manual=False)
         elif self._proxy.state in {"stopped", "missing", "failed"}:
             self.proxy_pill.set_text("Прокси не запущен")
@@ -1051,6 +1067,7 @@ class MainWindow(QMainWindow):
         if not self._proxy.owned:
             self.toast.info("Внешний прокси не останавливается")
             return
+        self._proxy_user_stopped = True
         self._proxy.stop()
         self.toast.info("Остановка прокси...")
 
@@ -1058,6 +1075,8 @@ class MainWindow(QMainWindow):
         """Restart the local proxy and ask for the password again if needed."""
         if self._proxy is None:
             return
+        self._proxy_prompt_denied = False
+        self._proxy_user_stopped = False
         if not self._proxy.owned and not self._proxy.port_open():
             self._start_proxy()
             return
@@ -1100,6 +1119,7 @@ class MainWindow(QMainWindow):
 
     def _on_proxy_ready(self, external: bool) -> None:
         """Reconnect all pages once the proxy endpoint answers."""
+        self._proxy_prompt_denied = False
         self.proxy_pill.setToolTip(
             self.translations.tr("Внешний прокси")
             if external
@@ -1117,6 +1137,7 @@ class MainWindow(QMainWindow):
             for token in ("парол", "password", "mac check", "хранилищ")
         ):
             self._wallet_password = ""
+            self._proxy_prompt_denied = True
         self.toast.error(message, title="Прокси")
         self.proxy_pill.set_text("Ошибка прокси")
         self.proxy_pill.set_level("danger")
@@ -1136,6 +1157,7 @@ class MainWindow(QMainWindow):
         if self._daemon is None:
             self.toast.info("В демо-режиме демон не запускается")
             return
+        self._daemon_user_stopped = False
         self._daemon.restart()
         self.toast.info("Перезапуск novacoind...")
 
@@ -1221,6 +1243,40 @@ class MainWindow(QMainWindow):
         self._parser_timer.setInterval(5000)
         self._parser_timer.timeout.connect(self._update_parser_footer)
         self._parser_timer.start()
+        self._backend_timer = QTimer(self)
+        self._backend_timer.setInterval(5000)
+        self._backend_timer.timeout.connect(self._watch_backends)
+        self._backend_timer.start()
+
+    def _watch_backends(self) -> None:
+        """Keep hidden services alive and refresh their health without clicks."""
+        if self.demo or self._really_quit:
+            return
+        now = time.monotonic()
+        if self.sheet_host.current_widget is None:
+            if (
+                self._daemon is not None
+                and self.settings.daemon_autostart
+                and not self._daemon_user_stopped
+                and self._daemon.state in {"stopped", "failed", "missing"}
+                and now - self._last_daemon_auto >= 30
+            ):
+                self._last_daemon_auto = now
+                self._daemon.start()
+            if (
+                self._proxy is not None
+                and self.settings.proxy_autostart
+                and not self._proxy_user_stopped
+                and not self._proxy_prompt_denied
+                and self._proxy.state in {"stopped", "failed", "missing"}
+                and now - self._last_proxy_auto >= 15
+            ):
+                self._last_proxy_auto = now
+                self._start_proxy(manual=False)
+        interval = 20 if self._online else 8
+        if not self._checking and now - self._last_connection_check >= interval:
+            self._last_connection_check = now
+            self._check_connection()
 
     def _apply_refresh_interval(self) -> None:
         """Restart the timer using the configured interval."""
@@ -1241,8 +1297,11 @@ class MainWindow(QMainWindow):
             if current is not None and current.page_id != "settings":
                 current.refresh()
         elif key == "daemon/autostart" and self.settings.daemon_autostart:
+            self._daemon_user_stopped = False
             self._maybe_start_daemon()
         elif key == "proxy/autostart" and self.settings.proxy_autostart:
+            self._proxy_user_stopped = False
+            self._proxy_prompt_denied = False
             self._maybe_start_proxy()
 
     def _periodic_refresh(self) -> None:

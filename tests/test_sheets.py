@@ -89,3 +89,14 @@ def test_connection_network_labels_are_stored(qtbot) -> None:
     assert dialog.network_values["blocks"].text() == "100"
     assert dialog.network_values["connections"].text() == "4"
     assert dialog.network_values["mining"].text() == "Нет"
+
+
+def test_connection_close_button_removes_scrim(window) -> None:
+    """Closing a sheet via its own Close button must hide the dim layer."""
+    window.open_connection_dialog()
+    dialog = window._connection_dialog
+    assert dialog is not None
+    dialog.close_button.click()
+    assert not window.sheet_host.isVisible()
+    assert not window.sheet_host.scrim.isVisible()
+    assert window.sheet_host.current_widget is None

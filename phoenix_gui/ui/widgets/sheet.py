@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PyQt6.QtCore import Qt, QEvent, QObject, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QDialog,
@@ -64,6 +64,14 @@ class SheetHost(QWidget):
         if watched is self.scrim and event.type() == QEvent.Type.MouseButtonPress:
             self.close_sheet()
             return True
+        # If an embedded dialog hides itself instead of rejecting, the sheet
+        # must not remain as a dark layer over the whole window.
+        if (
+            watched is self._widget
+            and event.type() == QEvent.Type.Hide
+            and not self._closed
+        ):
+            QTimer.singleShot(0, self.close_sheet)
         return super().eventFilter(watched, event)
 
     def show_sheet(
@@ -77,6 +85,7 @@ class SheetHost(QWidget):
             widget.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
             widget.finished.connect(lambda _code: self.close_sheet())
         widget.setParent(self.panel)
+        widget.installEventFilter(self)
         self.panel_layout.addWidget(widget)
         widget.show()
         widget.setFocus()
@@ -99,6 +108,8 @@ class SheetHost(QWidget):
     def close_sheet(self) -> None:
         """Remove the current sheet and return focus to the page."""
         if self._closed:
+            self.hide()
+            self.scrim.hide()
             return
         self._closed = True
         widget = self._widget
@@ -117,6 +128,7 @@ class SheetHost(QWidget):
         callback = self._on_closed
         self._on_closed = None
         self.hide()
+        self.scrim.hide()
         if callback is not None:
             callback()
 

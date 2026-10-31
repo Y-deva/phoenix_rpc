@@ -385,3 +385,69 @@ def test_connection_dialog_opens_and_reports_demo_state(window):
     assert window._connection_dialog.isVisible()
     assert not window._connection_dialog.start_all.isEnabled()
     window._connection_dialog.close()
+
+
+def test_backend_watchdog_starts_stopped_services(window):
+    """The watchdog starts daemon and proxy without user interaction."""
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.state = "stopped"
+            self.owned = False
+            self.started = False
+
+        def start(self, *_args) -> None:
+            self.started = True
+            self.state = "running"
+
+        def stop(self) -> None:
+            self.state = "stopped"
+
+        def port_open(self) -> bool:
+            return False
+
+    daemon = FakeBackend()
+    proxy = FakeBackend()
+    window.demo = False
+    window._daemon = daemon
+    window._proxy = proxy
+    window._wallet_password = "test"
+    window._daemon_user_stopped = False
+    window._proxy_user_stopped = False
+    window._proxy_prompt_denied = False
+    window._check_connection = lambda *args, **kwargs: None
+    window._watch_backends()
+    assert daemon.started is True
+    assert proxy.started is True
+
+
+def test_backend_watchdog_respects_manual_stop(window):
+    """A manually stopped service is not restarted by the watchdog."""
+
+    class FakeBackend:
+        state = "stopped"
+        owned = True
+
+        def __init__(self) -> None:
+            self.started = False
+
+        def start(self, *_args) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            pass
+
+        def port_open(self) -> bool:
+            return False
+
+    daemon = FakeBackend()
+    proxy = FakeBackend()
+    window.demo = False
+    window._daemon = daemon
+    window._proxy = proxy
+    window._daemon_user_stopped = True
+    window._proxy_user_stopped = True
+    window._check_connection = lambda *args, **kwargs: None
+    window._watch_backends()
+    assert daemon.started is False
+    assert proxy.started is False
