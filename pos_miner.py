@@ -26,8 +26,8 @@ from pos_block import build_empty_coinbase, build_pos_block, BLOCK_VERSION
 from scrypt_hash import scrypt_blockhash
 
 SEARCH_INTERVAL = 60
-LOOP_INTERVAL   = 15
-MAX_UTXOS       = 500
+LOOP_INTERVAL = 15
+MAX_UTXOS = 500
 
 MIN_REWARD = 2 * CENT
 
@@ -64,7 +64,8 @@ def _get_stakeable_utxos(rpc_config):
     conn = get_db_connection()
     try:
         c = conn.cursor()
-        c.execute('''
+        c.execute(
+            """
             SELECT u.txid, u.vout, u.redeem_script, u.amount, u.block_height,
                    h.category
             FROM utxos u
@@ -77,7 +78,9 @@ def _get_stakeable_utxos(rpc_config):
               )
             ORDER BY u.amount DESC
             LIMIT ?
-        ''', (MAX_UTXOS,))
+        """,
+            (MAX_UTXOS,),
+        )
         rows = c.fetchall()
     finally:
         conn.close()
@@ -92,13 +95,15 @@ def _get_stakeable_utxos(rpc_config):
             confirmations = now_height - block_height + 1 if block_height else 0
             if confirmations < maturity:
                 continue
-        result.append({
-            "txid": txid,
-            "vout": vout,
-            "redeem_script": bytes(rs),
-            "amount": amount,
-            "block_height": block_height,
-        })
+        result.append(
+            {
+                "txid": txid,
+                "vout": vout,
+                "redeem_script": bytes(rs),
+                "amount": amount,
+                "block_height": block_height,
+            }
+        )
     return result
 
 
@@ -111,8 +116,10 @@ def _get_kernel_stake_modifier(rpc_call, kernel_block):
         return _MODIFIER_CACHE[cache_key]
 
     MODIFIER_INTERVAL_RATIO = 3
+
     def section(s):
         return nModifierInterval * 63 // (63 + (63 - s) * (MODIFIER_INTERVAL_RATIO - 1))
+
     SELECTION_INTERVAL = sum(section(s) for s in range(64))
 
     kernel_time = kernel_block["time"]
@@ -187,11 +194,13 @@ def _find_kernel_solution(rpc_config, utxo, n_bits, now_ts):
         return None
     offset = compute_tx_offset(vtx_hex, kernel_index)
 
-    print(f"[POS] kernel params: "
-          f"index={kernel_index} offset={offset} "
-          f"tbf={n_time_block_from} ttp={n_time_tx_prev} "
-          f"modifier=0x{n_stake_modifier:016x} h={kernel_block['height']} "
-          f"nPrevout={utxo['vout']} nValueIn={utxo['amount']}")
+    print(
+        f"[POS] kernel params: "
+        f"index={kernel_index} offset={offset} "
+        f"tbf={n_time_block_from} ttp={n_time_tx_prev} "
+        f"modifier=0x{n_stake_modifier:016x} h={kernel_block['height']} "
+        f"nPrevout={utxo['vout']} nValueIn={utxo['amount']}"
+    )
 
     t_max = now_ts
     t_min = max(
@@ -215,10 +224,12 @@ def _find_kernel_solution(rpc_config, utxo, n_bits, now_ts):
             n_stake_modifier=n_stake_modifier,
         )
         if result:
-            print(f"[POS] solution: nTimeTx={n_time_tx} "
-                  f"hash={result['hash_proof_be'].hex()} "
-                  f"target={result['target']:064x} "
-                  f"weight={result['weight']} cdw={result['coin_day_weight']}")
+            print(
+                f"[POS] solution: nTimeTx={n_time_tx} "
+                f"hash={result['hash_proof_be'].hex()} "
+                f"target={result['target']:064x} "
+                f"weight={result['weight']} cdw={result['coin_day_weight']}"
+            )
             return {
                 "n_time_tx": n_time_tx,
                 "result": result,
@@ -232,17 +243,19 @@ def _is_final(tx, height, block_time):
     n_lock_time = tx.get("locktime", 0)
     if n_lock_time == 0:
         return True
-    if (n_lock_time < 500000000 and n_lock_time < height) or \
-       (n_lock_time >= 500000000 and n_lock_time < block_time):
+    if (n_lock_time < 500000000 and n_lock_time < height) or (
+        n_lock_time >= 500000000 and n_lock_time < block_time
+    ):
         return True
     for vin in tx.get("vin", []):
-        if vin.get("sequence", 0xffffffff) != 0xffffffff:
+        if vin.get("sequence", 0xFFFFFFFF) != 0xFFFFFFFF:
             return False
     return True
 
 
-def _collect_extra_txs(rpc_config, n_time, height, kernel_txid, kernel_vout,
-                       coinstake_size, coinbase_size):
+def _collect_extra_txs(
+    rpc_config, n_time, height, kernel_txid, kernel_vout, coinstake_size, coinbase_size
+):
     try:
         txids = _rpc(rpc_config, "getrawmempool")
     except Exception as e:
@@ -301,6 +314,7 @@ def _collect_extra_txs(rpc_config, n_time, height, kernel_txid, kernel_vout,
 
     return extra_txs, total_size
 
+
 def _drop_chains(chain_ids):
     if not chain_ids:
         return
@@ -322,13 +336,13 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
     conn = get_db_connection()
     try:
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             SELECT txid, chain_id, kind, seq, raw,
                    prev_txid, prev_vout, size, n_time
             FROM priority_txs
             ORDER BY added_at ASC, seq ASC
             LIMIT 1
-        ''')
+        """)
         row = c.fetchone()
         if not row:
             return [], [], None, []
@@ -336,8 +350,10 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
         txid, chain_id, kind, seq, raw_blob, prev_txid, prev_vout, size, tnt = row
 
         if raw_blob is None:
-            print(f"[POS] pending tx {txid[:10]} has NULL raw — drop chain "
-                  f"{chain_id[:10]}")
+            print(
+                f"[POS] pending tx {txid[:10]} has NULL raw — drop chain "
+                f"{chain_id[:10]}"
+            )
             return [], [], chain_id, [chain_id]
 
         if tnt and tnt > n_time:
@@ -347,34 +363,45 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
             print(f"[POS] pstore {txid[:10]} {size}B doesn't fit, wait")
             return [], [], None, []
 
-        c.execute("SELECT spent FROM utxos WHERE txid=? AND vout=?",
-                  (prev_txid, prev_vout))
+        c.execute(
+            "SELECT spent FROM utxos WHERE txid=? AND vout=?", (prev_txid, prev_vout)
+        )
         r = c.fetchone()
 
         if seq == 0:
             if not r:
-                print(f"[POS] chain {chain_id[:10]}: split input "
-                      f"{prev_txid[:10]}:{prev_vout} not in utxos, wait")
+                print(
+                    f"[POS] chain {chain_id[:10]}: split input "
+                    f"{prev_txid[:10]}:{prev_vout} not in utxos, wait"
+                )
                 return [], [], None, []
             if r[0] != 0:
-                print(f"[POS] chain {chain_id[:10]}: split input "
-                      f"{prev_txid[:10]}:{prev_vout} spent, drop")
+                print(
+                    f"[POS] chain {chain_id[:10]}: split input "
+                    f"{prev_txid[:10]}:{prev_vout} spent, drop"
+                )
                 return [], [], chain_id, [chain_id]
         else:
             if not r:
-                c.execute('''SELECT kind FROM priority_txs
-                             WHERE chain_id=? AND seq=?''',
-                          (chain_id, seq - 1))
+                c.execute(
+                    """SELECT kind FROM priority_txs
+                             WHERE chain_id=? AND seq=?""",
+                    (chain_id, seq - 1),
+                )
                 pred = c.fetchone()
                 if pred and pred[0] == "split":
                     pass
                 else:
-                    print(f"[POS] chain {chain_id[:10]}: pred output "
-                          f"{prev_txid[:10]}:{prev_vout} not yet in utxos, wait")
+                    print(
+                        f"[POS] chain {chain_id[:10]}: pred output "
+                        f"{prev_txid[:10]}:{prev_vout} not yet in utxos, wait"
+                    )
                     return [], [], None, []
             elif r[0] != 0:
-                print(f"[POS] chain {chain_id[:10]}: pred output "
-                      f"{prev_txid[:10]}:{prev_vout} already spent, drop")
+                print(
+                    f"[POS] chain {chain_id[:10]}: pred output "
+                    f"{prev_txid[:10]}:{prev_vout} already spent, drop"
+                )
                 return [], [], chain_id, [chain_id]
 
         if (prev_txid, prev_vout) in used_inputs:
@@ -387,14 +414,20 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
         total = size
 
         if kind == "split":
-            c.execute('''SELECT txid, raw, prev_txid, prev_vout, size
+            c.execute(
+                """SELECT txid, raw, prev_txid, prev_vout, size
                          FROM priority_txs
-                         WHERE chain_id=? AND seq=1''', (chain_id,))
+                         WHERE chain_id=? AND seq=1""",
+                (chain_id,),
+            )
             nxt = c.fetchone()
             if nxt:
                 ntxid, nraw_blob, nprev, nvout, nsize = nxt
-                if (nprev, nvout) == (txid, 0) and nraw_blob is not None \
-                        and total + nsize <= budget:
+                if (
+                    (nprev, nvout) == (txid, 0)
+                    and nraw_blob is not None
+                    and total + nsize <= budget
+                ):
                     picked_raw.append(bytes(nraw_blob))
                     picked_txids.append(ntxid)
                     used_inputs.add((nprev, nvout))
@@ -411,18 +444,25 @@ def _on_pstore_confirmed(txid, height):
         c = conn.cursor()
         c.execute("BEGIN IMMEDIATE")
 
-        c.execute('''SELECT prev_txid, prev_vout FROM priority_txs
-                     WHERE txid=?''', (txid,))
+        c.execute(
+            """SELECT prev_txid, prev_vout FROM priority_txs
+                     WHERE txid=?""",
+            (txid,),
+        )
         row = c.fetchone()
         if row and row[0] is not None:
-            c.execute("UPDATE utxos SET spent=1 WHERE txid=? AND vout=?",
-                      (row[0], row[1]))
+            c.execute(
+                "UPDATE utxos SET spent=1 WHERE txid=? AND vout=?", (row[0], row[1])
+            )
 
         c.execute("DELETE FROM priority_txs WHERE txid=?", (txid,))
 
-        c.execute('''UPDATE pstore_anchor
+        c.execute(
+            """UPDATE pstore_anchor
                      SET confirmed=1, updated_at=strftime('%s','now')
-                     WHERE id=1 AND txid=?''', (txid,))
+                     WHERE id=1 AND txid=?""",
+            (txid,),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -431,9 +471,12 @@ def _on_pstore_confirmed(txid, height):
 def _submit_block(rpc_config, block_hex):
     return _rpc(rpc_config, "submitblock", [block_hex])
 
+
 def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
-    print(f"[POS] Miner started (testnet={F_TESTNET}, "
-          f"nCoinbaseMaturity={nCoinbaseMaturity}, MIN_REWARD={MIN_REWARD})")
+    print(
+        f"[POS] Miner started (testnet={F_TESTNET}, "
+        f"nCoinbaseMaturity={nCoinbaseMaturity}, MIN_REWARD={MIN_REWARD})"
+    )
 
     if _FALCON_PUBKEY is None or _FALCON_SECRET is None:
         print("[POS] Falcon keys not set, exiting")
@@ -446,35 +489,44 @@ def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
         try:
             info = _rpc(rpc_config, "getinfo")
             height = info["blocks"]
-            best_hash = _rpc(rpc_config, "getblockhash", [height])
 
-            n_bits = get_next_target_required_pos(rpc_call, best_hash)
-            now_ts = int(time.time())
-
+            # Do not scan stake modifiers before we have anything to stake.
+            # The old order performed thousands of getblock calls on an empty
+            # wallet and starved the daemon RPC queue.
             utxos = _get_stakeable_utxos(rpc_config)
             if not utxos:
                 time.sleep(interval)
                 continue
 
+            best_hash = _rpc(rpc_config, "getblockhash", [height])
+            n_bits = get_next_target_required_pos(rpc_call, best_hash)
+            now_ts = int(time.time())
+
             found = False
             for utxo in utxos:
-                coin_age = get_coin_age(rpc_call, [(utxo["txid"], utxo["vout"])], now_ts)
+                coin_age = get_coin_age(
+                    rpc_call, [(utxo["txid"], utxo["vout"])], now_ts
+                )
                 if coin_age is None or coin_age == 0:
                     continue
 
                 est_reward = get_proof_of_stake_reward(coin_age, n_bits, now_ts)
                 if est_reward < MIN_REWARD:
-                    print(f"[POS] skip {utxo['txid'][:10]}:{utxo['vout']} "
-                          f"reward={est_reward} < {MIN_REWARD} "
-                          f"coin_age={coin_age}")
+                    print(
+                        f"[POS] skip {utxo['txid'][:10]}:{utxo['vout']} "
+                        f"reward={est_reward} < {MIN_REWARD} "
+                        f"coin_age={coin_age}"
+                    )
                     continue
 
                 sol = _find_kernel_solution(rpc_config, utxo, n_bits, now_ts)
                 if not sol:
                     continue
 
-                print(f"[POS] Found kernel for {utxo['txid'][:10]}:{utxo['vout']} "
-                      f"nTimeTx={sol['n_time_tx']} coin_age={coin_age}")
+                print(
+                    f"[POS] Found kernel for {utxo['txid'][:10]}:{utxo['vout']} "
+                    f"nTimeTx={sol['n_time_tx']} coin_age={coin_age}"
+                )
 
                 addr_info = generate_address(pubkey_hash, account="pos")
 
@@ -540,24 +592,28 @@ def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
                     extra_txs=extra_txs,
                 )
 
-                print(f"[POS] Submitting h={height+1} "
-                      f"nTimeTx={sol['n_time_tx']} "
-                      f"coinstake_txid={cst['txid']} "
-                      f"nBits=0x{n_bits:08x} "
-                      f"block_size={len(block)} "
-                      f"txs={2 + len(extra_txs)}")
+                print(
+                    f"[POS] Submitting h={height + 1} "
+                    f"nTimeTx={sol['n_time_tx']} "
+                    f"coinstake_txid={cst['txid']} "
+                    f"nBits=0x{n_bits:08x} "
+                    f"block_size={len(block)} "
+                    f"txs={2 + len(extra_txs)}"
+                )
 
                 try:
                     res = _submit_block(rpc_config, block.hex())
                     if res is None:
-                        print(f"[POS] Block {height+1} accepted! "
-                              f"reward → {addr_info['address']}")
+                        print(
+                            f"[POS] Block {height + 1} accepted! "
+                            f"reward → {addr_info['address']}"
+                        )
                         for t in picked_txids:
                             _on_pstore_confirmed(t, height + 1)
                         found = True
                         break
                     else:
-                        print(f"[POS] Block {height+1} rejected: {res}")
+                        print(f"[POS] Block {height + 1} rejected: {res}")
                 except Exception as e:
                     print(f"[POS] submitblock error: {e}")
 
@@ -568,4 +624,3 @@ def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
             print(f"[POS] Loop error: {e}")
 
         time.sleep(interval)
-

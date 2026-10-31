@@ -8,6 +8,7 @@ networking disabled so the original file is never modified.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import socket
@@ -17,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Iterator
+from typing import Iterable, Iterator
 
 from .config import ProjectConfig
 from .daemon import discover_daemon
@@ -25,6 +26,7 @@ from .validation import validate_address
 from ..rpc.client import RPCClient, RPCError
 from ..settings import Settings
 
+LOGGER = logging.getLogger("phoenix.migration")
 MIGRATION_LABEL = "legacy-migration"
 WIF_MIN_LENGTH = 50
 WIF_MAX_LENGTH = 52
@@ -68,6 +70,22 @@ def _direct_client(project: ProjectConfig, timeout: float = 900.0) -> RPCClient:
         project.daemon_password,
         timeout=timeout,
     )
+
+
+@contextmanager
+def _paused_indexer(project: ProjectConfig) -> Iterator[None]:
+    """Freeze the proxy UTXO parser while a direct migration RPC runs."""
+    marker = Path(project.root) / "parser.pause"
+    existed = marker.exists()
+    try:
+        marker.touch(exist_ok=True)
+        yield
+    finally:
+        if not existed:
+            try:
+                marker.unlink()
+            except FileNotFoundError:
+                pass
 
 
 def _report(client: RPCClient, source: str, keys: int = 0) -> MigrationReport:
@@ -115,12 +133,42 @@ def validate_destination(address: str, project: ProjectConfig) -> str:
 
 def import_wif(project: ProjectConfig, wif: str) -> MigrationReport:
     """Import one WIF key into the running daemon and scan its balance."""
-    client = _direct_client(project)
-    try:
-        client.call("importprivkey", [validate_wif(wif), MIGRATION_LABEL, True])
-        return _report(client, "wif", keys=1)
-    finally:
-        client.close()
+    return import_wif_keys(project, [wif])
+
+
+def import_wif_keys(project: ProjectConfig, keys: Iterable[str]) -> MigrationReport:
+    """Import several WIF keys with one final blockchain rescan.
+
+    Importing every key with ``rescan=True`` forces a full wallet rescan for
+    each key.  The last key triggers the single rescan needed for all of them.
+    """
+    cleaned: list[str] = []
+    for value in keys:
+        key = validate_wif(value)
+        if key not in cleaned:
+            cleaned.append(key)
+    if not cleaned:
+        raise ValueError("Введите хотя бы один приватный ключ WIF")
+    LOGGER.info("Importing %d legacy WIF key(s)", len(cleaned))
+    with _paused_indexer(project):
+        client = _direct_client(project)
+        try:
+            for index, key in enumerate(cleaned):
+                rescan = index == len(cleaned) - 1
+                try:
+                    client.call("importprivkey", [key, MIGRATION_LABEL, rescan])
+                except RPCError as exc:
+                    if "already" not in str(exc).casefold():
+                        raise
+            report = _report(client, "wif", keys=len(cleaned))
+            LOGGER.info(
+                "Legacy import finished: balance=%s inputs=%d",
+                report.balance,
+                report.inputs,
+            )
+            return report
+        finally:
+            client.close()
 
 
 @contextmanager
@@ -214,7 +262,10 @@ def import_wallet_file(
     project: ProjectConfig, settings: Settings, wallet_file: Path, passphrase: str = ""
 ) -> MigrationReport:
     """Extract all keys from wallet.dat through an offline daemon and import them."""
-    with _legacy_daemon(project, settings, wallet_file) as legacy:
+    with (
+        _paused_indexer(project),
+        _legacy_daemon(project, settings, wallet_file) as legacy,
+    ):
         if passphrase:
             try:
                 legacy.call("walletpassphrase", [passphrase, 300])
@@ -251,13 +302,14 @@ def sweep_all(
     and can be removed by restoring its backup.
     """
     address = validate_destination(destination, project)
-    client = _direct_client(project)
-    try:
-        balance = Decimal(str(client.call("getbalance") or 0))
-        amount = balance - fee_reserve
-        if amount <= Decimal("0.0001"):
-            raise ValueError("На перенесенном балансе нет средств для вывода")
-        result = client.call("sendtoaddress", [address, float(f"{amount:.8f}")])
-        return str(result or ""), amount
-    finally:
-        client.close()
+    with _paused_indexer(project):
+        client = _direct_client(project)
+        try:
+            balance = Decimal(str(client.call("getbalance") or 0))
+            amount = balance - fee_reserve
+            if amount <= Decimal("0.0001"):
+                raise ValueError("На перенесенном балансе нет средств для вывода")
+            result = client.call("sendtoaddress", [address, float(f"{amount:.8f}")])
+            return str(result or ""), amount
+        finally:
+            client.close()

@@ -100,3 +100,17 @@ def test_connection_close_button_removes_scrim(window) -> None:
     assert not window.sheet_host.isVisible()
     assert not window.sheet_host.scrim.isVisible()
     assert window.sheet_host.current_widget is None
+
+
+def test_migration_dialog_closes_without_leaving_scrim(window) -> None:
+    """Closing the migration sheet must not fail on its result label."""
+    from phoenix_gui.settings import Settings
+    from phoenix_gui.ui.dialogs.migration import MigrationDialog
+
+    project = window.context.config
+    dialog = MigrationDialog(project, Settings(project.root / "sheet-test.ini"), {})
+    window.show_sheet(dialog)
+    assert window.sheet_host.isVisible()
+    dialog.reject()
+    assert not window.sheet_host.isVisible()
+    assert not window.sheet_host.scrim.isVisible()

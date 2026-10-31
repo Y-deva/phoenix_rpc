@@ -28,7 +28,7 @@ from pstore import (
 )
 from group_tx import handle_listunspent, handle_getbalance, handle_listtransactions
 from unlock import handle_sendtoaddress, handle_signrawtransaction, set_keypair
-from utxo_parser import run_parser_loop
+from utxo_parser import run_parser_loop, pause_parser, resume_parser
 from pow_work import handle_getwork_request, handle_getwork_submit
 from pos_miner import set_falcon_keys as pos_set_falcon, run_pos_miner
 import hashlib
@@ -123,6 +123,7 @@ def rpc_proxy():
                         "id": req_id,
                     }
                 ), 400
+            pause_parser()
             try:
                 result = handle_pstore(params, rpc_config)
                 return jsonify({"result": result, "error": None, "id": req_id})
@@ -135,6 +136,8 @@ def rpc_proxy():
                         "id": req_id,
                     }
                 ), 400
+            finally:
+                resume_parser()
 
         if method == "pload":
             if not params:
@@ -210,7 +213,11 @@ def rpc_proxy():
             )
 
         if method == "sendtoaddress":
-            txid = handle_sendtoaddress(params, rpc_config, broadcast=True)
+            pause_parser()
+            try:
+                txid = handle_sendtoaddress(params, rpc_config, broadcast=True)
+            finally:
+                resume_parser()
             return jsonify({"result": txid, "error": None, "id": req_id})
 
         if method == "getwork":
@@ -220,13 +227,18 @@ def rpc_proxy():
                 result = handle_getwork_submit(params[0], rpc_config)
             return jsonify({"result": result, "error": None, "id": req_id})
 
-        resp = requests.post(
-            DEMON_URL,
-            headers={"Content-Type": "application/json"},
-            auth=(DEMON_USER, DEMON_PASS),
-            json=data,
-            timeout=30,
-        )
+        # Interactive RPC has priority over the background chain scanner.
+        pause_parser()
+        try:
+            resp = requests.post(
+                DEMON_URL,
+                headers={"Content-Type": "application/json"},
+                auth=(DEMON_USER, DEMON_PASS),
+                json=data,
+                timeout=30,
+            )
+        finally:
+            resume_parser()
         return Response(
             resp.text, status=resp.status_code, content_type="application/json"
         )

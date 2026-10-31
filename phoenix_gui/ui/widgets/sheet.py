@@ -119,7 +119,7 @@ class SheetHost(QWidget):
             # handlers run (password dialogs rely on it for cancellation).
             if (
                 isinstance(widget, QDialog)
-                and widget.result() != QDialog.DialogCode.Accepted
+                and QDialog.result(widget) != QDialog.DialogCode.Accepted
             ):
                 widget.reject()
             self.panel_layout.removeWidget(widget)

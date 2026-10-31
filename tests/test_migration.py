@@ -6,11 +6,13 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 
 from phoenix_gui.core import migration
 from phoenix_gui.core.config import ProjectConfig
 from phoenix_gui.core.migration import (
     import_wif,
+    import_wif_keys,
     sweep_all,
     validate_destination,
     validate_wif,
@@ -114,7 +116,7 @@ def test_migration_dialog_validates_empty_wif(qtbot, project: ProjectConfig) -> 
 
     dialog._scan()
 
-    assert "Введите" in dialog.result.text()
+    assert "Введите" in dialog.result_label.text()
     assert dialog.sweep_button.isEnabled() is False
 
 
@@ -127,5 +129,35 @@ def test_migration_dialog_switches_sources(qtbot, project: ProjectConfig) -> Non
     dialog.mode.set_value("wallet")
     dialog._on_mode_changed("wallet")
 
-    assert dialog.pages.currentIndex() == 1
+    assert dialog.pages.currentIndex() == 2
     assert dialog.sweep_button.isEnabled() is False
+
+
+def test_import_wif_keys_rescans_once(monkeypatch, project: ProjectConfig) -> None:
+    """A batch import delays the expensive rescan until the last key."""
+    client = FakeClient()
+    monkeypatch.setattr(migration, "_direct_client", lambda _project: client)
+
+    report = import_wif_keys(project, ["5" * 51, "5" * 50, "5" * 50])
+
+    imports = [call for call in client.calls if call[0] == "importprivkey"]
+    assert len(imports) == 2
+    assert [call[1][2] for call in imports] == [False, True]
+    assert report.keys == 2
+    assert client.closed is True
+
+
+def test_migration_dialog_manual_route_copies_address(
+    qtbot, project: ProjectConfig
+) -> None:
+    """The manual route explains the legacy-client transfer and copies it."""
+    settings = Settings(project.root / "settings.ini")
+    destination = address_from_hash(b"" * 20)
+    dialog = MigrationDialog(project, settings, {}, destination=destination)
+    qtbot.addWidget(dialog)
+
+    dialog._show_manual()
+
+    assert not dialog.manual_hint.isHidden()
+    assert destination in dialog.manual_hint.text()
+    assert QApplication.clipboard().text() == destination

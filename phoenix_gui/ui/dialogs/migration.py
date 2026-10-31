@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import re
 from decimal import Decimal
 from functools import partial
 from pathlib import Path
@@ -9,11 +11,13 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QVBoxLayout,
@@ -21,21 +25,27 @@ from PyQt6.QtWidgets import (
 )
 
 from ...core.config import ProjectConfig
+from ...core.errors import humanize_error
 from ...core.formatting import format_nvc, shorten_txid
 from ...core.migration import (
     MigrationReport,
     import_wif,
+    import_wif_keys,
     import_wallet_file,
     sweep_all,
     validate_destination,
     validate_wif,
 )
 from ...core.tasks import run_async
+from ...rpc.client import RPCConnectionError
 from ...settings import Settings
 from ..widgets.card import Divider
 from ..widgets.fields import PasswordField, PathField, SegmentedControl
 from ..widgets.icons import icon
 from ..widgets.progress import TaskProgress
+
+LOGGER = logging.getLogger("phoenix.migration")
+_WIF_PATTERN = re.compile(r"\b[5-9][1-9A-HJ-NP-Za-km-z]{50,51}\b")
 
 
 class MigrationDialog(QDialog):
@@ -105,12 +115,14 @@ class MigrationDialog(QDialog):
 
         self.mode = SegmentedControl()
         self.mode.add_segment("wif", "Ключ WIF", "Вставить приватный ключ")
+        self.mode.add_segment("keys", "Список WIF", "Несколько ключей сразу")
         self.mode.add_segment("wallet", "wallet.dat", "Загрузить файл старого кошелька")
         self.mode.valueChanged.connect(self._on_mode_changed)
         layout.addWidget(self.mode)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(self._build_wif_page())
+        self.pages.addWidget(self._build_keys_page())
         self.pages.addWidget(self._build_wallet_page())
         layout.addWidget(self.pages)
 
@@ -122,6 +134,22 @@ class MigrationDialog(QDialog):
         self.destination.setToolTip("Сюда будет выведен весь перенесенный баланс")
         self.destination.setText(destination)
         layout.addWidget(self.destination)
+
+        manual_row = QHBoxLayout()
+        self.manual_button = QPushButton("Перевести вручную из старого кошелька")
+        self.manual_button.setObjectName("GhostButton")
+        self.manual_button.setToolTip(
+            "Показать инструкцию для штатного клиента NovaCoin"
+        )
+        self.manual_button.clicked.connect(self._show_manual)
+        manual_row.addWidget(self.manual_button)
+        manual_row.addStretch(1)
+        layout.addLayout(manual_row)
+        self.manual_hint = QLabel("")
+        self.manual_hint.setObjectName("HintText")
+        self.manual_hint.setWordWrap(True)
+        self.manual_hint.setVisible(False)
+        layout.addWidget(self.manual_hint)
 
         steps = QFrame()
         steps.setObjectName("SoftCard")
@@ -142,10 +170,10 @@ class MigrationDialog(QDialog):
             steps_layout.addWidget(row_label)
         layout.addWidget(steps)
 
-        self.result = QLabel("")
-        self.result.setObjectName("HintText")
-        self.result.setWordWrap(True)
-        layout.addWidget(self.result)
+        self.result_label = QLabel("")
+        self.result_label.setObjectName("HintText")
+        self.result_label.setWordWrap(True)
+        layout.addWidget(self.result_label)
 
         self.confirm_panel = QFrame()
         self.confirm_panel.setObjectName("SoftCard")
@@ -212,7 +240,30 @@ class MigrationDialog(QDialog):
         layout.addWidget(self.wif)
         hint = QLabel(
             "WIF можно получить в старом кошельке командой dumpprivkey. "
-            "Если ключей несколько, повторите импорт для каждого."
+            "Для нескольких ключей используйте вкладку «Список WIF»."
+        )
+        hint.setObjectName("HintText")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return page
+
+    def _build_keys_page(self) -> QWidget:
+        """Create the multi-key WIF import form."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(6)
+        caption = QLabel("Приватные ключи WIF, по одному в строке")
+        caption.setObjectName("CardCaption")
+        self.wif_keys = QPlainTextEdit()
+        self.wif_keys.setPlaceholderText("5...\n9...\n...")
+        self.wif_keys.setFixedHeight(92)
+        self.wif_keys.setToolTip("Ключи вводятся только в память и не сохраняются")
+        layout.addWidget(caption)
+        layout.addWidget(self.wif_keys)
+        hint = QLabel(
+            "Все ключи импортируются за один проход, а блокчейн "
+            "пересканируется один раз после последнего ключа."
         )
         hint.setObjectName("HintText")
         hint.setWordWrap(True)
@@ -253,11 +304,12 @@ class MigrationDialog(QDialog):
 
     def _on_mode_changed(self, value: str) -> None:
         """Switch source forms without losing the destination."""
-        self.pages.setCurrentIndex(0 if value == "wif" else 1)
+        self.pages.setCurrentIndex({"wif": 0, "keys": 1, "wallet": 2}.get(value, 0))
         self._report = None
         self._sent = False
         self.sweep_button.setEnabled(False)
-        self.result.setText("")
+        self.manual_hint.setVisible(False)
+        self.result_label.setText("")
 
     def _set_busy(self, busy: bool, text: str = "") -> None:
         """Disable actions while a background import runs."""
@@ -279,6 +331,17 @@ class MigrationDialog(QDialog):
             if self.mode.value() == "wif":
                 wif = validate_wif(self.wif.text())
                 worker = partial(import_wif, self.project, wif)
+            elif self.mode.value() == "keys":
+                keys = [
+                    line.strip()
+                    for line in self.wif_keys.toPlainText().splitlines()
+                    if line.strip()
+                ]
+                if not keys:
+                    raise ValueError("Введите хотя бы один приватный ключ WIF")
+                for key in keys:
+                    validate_wif(key)
+                worker = partial(import_wif_keys, self.project, keys)
             else:
                 path = Path(self.wallet_path.path())
                 if not self.wallet_path.path():
@@ -288,9 +351,9 @@ class MigrationDialog(QDialog):
                     import_wallet_file, self.project, self.settings, path, passphrase
                 )
         except ValueError as exc:
-            self.result.setText(str(exc))
+            self.result_label.setText(str(exc))
             return
-        self.result.setText("Импорт ключей. Это может занять несколько минут.")
+        self.result_label.setText("Импорт ключей. Это может занять несколько минут.")
         self._set_busy(True, "Импорт ключей и сканирование блокчейна...")
         run_async(worker, self._on_scan_ok, self._on_error, self._on_done)
 
@@ -299,21 +362,51 @@ class MigrationDialog(QDialog):
         if not isinstance(report, MigrationReport):
             return
         self._report = report
-        self.result.setText(
+        self.result_label.setText(
             f"Найдено: {format_nvc(report.balance)} NVC, "
             f"входов: {report.inputs}, ключей: {report.keys}. "
             "Проверьте адрес и нажмите Перевести в Phoenix."
         )
         self.sweep_button.setEnabled(report.balance > 0)
         if report.balance <= 0:
-            self.result.setText(
+            self.result_label.setText(
                 "Ключи импортированы, но баланс не найден. "
                 "Демон мог еще не синхронизироваться; повторите позже."
             )
 
+    def _describe_error(self, error: object) -> str:
+        """Turn a migration failure into an actionable, redacted message."""
+        if isinstance(error, RPCConnectionError):
+            message = (
+                "Локальный демон novacoind не ответил. Вероятно, он еще "
+                "синхронизируется; дождитесь завершения и повторите импорт."
+            )
+        else:
+            message = humanize_error(error)
+        return _WIF_PATTERN.sub("<WIF>", message)[:500]
+
     def _on_error(self, error: object) -> None:
         """Show a safe error without exposing key material."""
-        self.result.setText(str(error)[:500])
+        message = self._describe_error(error)
+        LOGGER.warning("Migration worker failed: %s", message)
+        self.result_label.setText(message)
+
+    def _show_manual(self) -> None:
+        """Explain the zero-key transfer route through the legacy client."""
+        try:
+            destination = validate_destination(self.destination.text(), self.project)
+        except ValueError as exc:
+            self.result_label.setText(str(exc))
+            return
+        self.manual_hint.setText(
+            "Откройте старый клиент NovaCoin и отправьте весь баланс на адрес "
+            f"{destination}. Старый клиент подпишет ECDSA-транзакцию сам; "
+            "импорт ключей в Phoenix не нужен. Дождитесь подтверждения, "
+            "затем обновите раздел Обзор. Адрес скопирован в буфер обмена."
+        )
+        self.manual_hint.setVisible(True)
+        QApplication.clipboard().setText(destination)
+        self.result_label.setText("")
 
     def _on_done(self) -> None:
         """Restore controls after a worker finishes."""
@@ -328,11 +421,11 @@ class MigrationDialog(QDialog):
         try:
             destination = validate_destination(self.destination.text(), self.project)
         except ValueError as exc:
-            self.result.setText(str(exc))
+            self.result_label.setText(str(exc))
             return
         amount = self._report.balance - Decimal("0.001")
         if amount <= 0:
-            self.result.setText("Недостаточно средств для вывода.")
+            self.result_label.setText("Недостаточно средств для вывода.")
             return
         self.confirm_label.setText(
             f"Вывести {format_nvc(amount)} NVC на адрес {destination}? "
@@ -352,11 +445,11 @@ class MigrationDialog(QDialog):
         try:
             destination = validate_destination(self.destination.text(), self.project)
         except ValueError as exc:
-            self.result.setText(str(exc))
+            self.result_label.setText(str(exc))
             return
         amount = self._report.balance - Decimal("0.001")
         if amount <= 0:
-            self.result.setText("Недостаточно средств для вывода.")
+            self.result_label.setText("Недостаточно средств для вывода.")
             return
         self.confirm_panel.setVisible(False)
         self._set_busy(True, "Отправка перевода...")
@@ -370,7 +463,7 @@ class MigrationDialog(QDialog):
     def _on_sweep_ok(self, result: object) -> None:
         """Show the txid and notify pages to refresh."""
         txid, amount = result if isinstance(result, tuple) else ("", Decimal("0"))
-        self.result.setText(
+        self.result_label.setText(
             f"Отправлено {format_nvc(amount)} NVC. TxID: {shorten_txid(txid)}. "
             "После подтверждения баланс появится в Phoenix."
         )

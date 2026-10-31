@@ -138,6 +138,9 @@ class MainWindow(QMainWindow):
         self._last_daemon_auto = 0.0
         self._last_proxy_auto = 0.0
         self._last_connection_check = 0.0
+        self._connection_retry = 8.0
+        self._last_connectivity_notice = 0.0
+        self._backend_failure_notice_at = 0.0
         self._sync: SyncStatus | None = None
         self._pages: dict[str, Any] = {}
         self._sounds = SoundPlayer(settings, self)
@@ -725,6 +728,8 @@ class MainWindow(QMainWindow):
             return
         if self._checking:
             return
+        if manual:
+            self._connection_retry = 8.0
         if self.service is None:
             self._checking = False
             self.footer_status.setText("Ожидание прокси...")
@@ -753,6 +758,8 @@ class MainWindow(QMainWindow):
         """Mark online, update indicators and refresh stale content."""
         was_online = self._online
         self._online = True
+        self._connection_retry = 20.0
+        self._last_connectivity_notice = 0.0
         self._sync = status
         self.banner.setVisible(False)
         self.network_pill.set_text(self.translations.tr("В сети"))
@@ -797,6 +804,7 @@ class MainWindow(QMainWindow):
     def _on_connection_error(self, error: object, manual: bool) -> None:
         """Show an offline banner with an actionable hint."""
         self._online = False
+        self._connection_retry = min(60.0, max(8.0, self._connection_retry * 1.6))
         self.network_pill.set_text(self.translations.tr("Нет связи"))
         self.network_pill.set_level("danger")
         self.network_pill.setToolTip(humanize_error(error))
@@ -976,9 +984,17 @@ class MainWindow(QMainWindow):
         )
         QTimer.singleShot(600, self._check_connection)
 
+    def _notify_backend_failure(self, title: str, message: str) -> None:
+        """Show backend failures at most once a minute during automatic retries."""
+        now = time.monotonic()
+        if now - self._backend_failure_notice_at < 60.0:
+            return
+        self._backend_failure_notice_at = now
+        self.toast.error(message, title=title)
+
     def _on_daemon_failed(self, message: str) -> None:
         """Report daemon failures without hiding the rest of the wallet."""
-        self.toast.error(message, title="novacoind")
+        self._notify_backend_failure("novacoind", message)
         self.daemon_pill.set_text("Ошибка демона")
         self.daemon_pill.set_level("danger")
         self.daemon_pill.setToolTip(message)
@@ -1120,6 +1136,7 @@ class MainWindow(QMainWindow):
     def _on_proxy_ready(self, external: bool) -> None:
         """Reconnect all pages once the proxy endpoint answers."""
         self._proxy_prompt_denied = False
+        self._backend_failure_notice_at = 0.0
         self.proxy_pill.setToolTip(
             self.translations.tr("Внешний прокси")
             if external
@@ -1138,7 +1155,7 @@ class MainWindow(QMainWindow):
         ):
             self._wallet_password = ""
             self._proxy_prompt_denied = True
-        self.toast.error(message, title="Прокси")
+        self._notify_backend_failure("Прокси", message)
         self.proxy_pill.set_text("Ошибка прокси")
         self.proxy_pill.set_level("danger")
         self.proxy_pill.setToolTip(message)
@@ -1171,7 +1188,32 @@ class MainWindow(QMainWindow):
         self.footer_status.setText(message)
 
     def _on_page_error(self, message: str) -> None:
-        """Forward page errors to a toast."""
+        """Forward page errors to a toast, throttling connectivity noise."""
+        now = time.monotonic()
+        lowered = message.casefold()
+        connectivity = any(
+            hint in lowered
+            for hint in (
+                "did not respond",
+                "не ответил",
+                "timed out",
+                "таймаут",
+                "timeout",
+                "connection",
+                "соединен",
+                "прокси",
+                "демон",
+                "502",
+                "503",
+            )
+        )
+        # One connectivity toast until a successful check: the banner and
+        # footer already show the live state, so automatic retries stay quiet.
+        if connectivity and self._last_connectivity_notice:
+            self.footer_status.setText(message[:160])
+            return
+        if connectivity:
+            self._last_connectivity_notice = now
         self._sounds.play("error")
         self.toast.error(message, title="Ошибка")
         self.footer_status.setText("Ошибка")
@@ -1273,7 +1315,7 @@ class MainWindow(QMainWindow):
             ):
                 self._last_proxy_auto = now
                 self._start_proxy(manual=False)
-        interval = 20 if self._online else 8
+        interval = 20.0 if self._online else self._connection_retry
         if not self._checking and now - self._last_connection_check >= interval:
             self._last_connection_check = now
             self._check_connection()
@@ -1307,7 +1349,9 @@ class MainWindow(QMainWindow):
     def _periodic_refresh(self) -> None:
         """Refresh the active page and reconnect if needed."""
         if not self._online:
-            self._check_connection()
+            if time.monotonic() - self._last_connection_check >= self._connection_retry:
+                self._last_connection_check = time.monotonic()
+                self._check_connection()
             return
         page = self.current_page
         if page is not None and getattr(page, "auto_refresh", False):

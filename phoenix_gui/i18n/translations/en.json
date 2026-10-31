@@ -449,7 +449,15 @@
     "Нет": "No",
     "Остановить узел": "Stop node",
     "Узел запущен вне этого окна. После остановки кошелек потеряет соединение с сетью, пока узел не будет запущен снова.": "The node was started outside this window. After stopping, the wallet will lose its network connection until the node is started again.",
-    "Команда остановки узла отправлена": "Node stop command sent"
+    "Команда остановки узла отправлена": "Node stop command sent",
+    "Список WIF": "WIF list",
+    "Несколько ключей сразу": "Several keys at once",
+    "Приватные ключи WIF, по одному в строке": "Private WIF keys, one per line",
+    "Ключи вводятся только в память и не сохраняются": "Keys are kept in memory only and are not saved",
+    "Все ключи импортируются за один проход, а блокчейн пересканируется один раз после последнего ключа.": "All keys are imported in one pass and the blockchain is rescanned once after the last key.",
+    "Перевести вручную из старого кошелька": "Send manually from the old wallet",
+    "WIF можно получить в старом кошельке командой dumpprivkey. Для нескольких ключей используйте вкладку «Список WIF».": "Export a WIF from the old wallet with dumpprivkey. For several keys use the WIF list tab.",
+    "Откройте старый клиент NovaCoin и отправьте весь баланс на адрес ": "Open the old NovaCoin client and send the whole balance to "
   },
   "patterns": {
     "Доступно: (.+)": "Available: {0}",

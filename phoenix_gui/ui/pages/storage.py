@@ -78,6 +78,17 @@ class StoragePage(ScrollPage):
         title.setObjectName("CardTitle")
         card.add(title)
 
+        funds_hint = QLabel(
+            "Для загрузки нужен хотя бы один подтвержденный вход. "
+            "При пустом кошельке сначала перенесите средства."
+        )
+        funds_hint.setObjectName("HintText")
+        funds_hint.setWordWrap(True)
+        funds_hint.setToolTip(
+            "pstore создает якорь на 1 сатоши и дробит подтвержденный UTXO"
+        )
+        card.add(funds_hint)
+
         self.source_control = SegmentedControl()
         self.source_control.add_segment(
             "file", "Файл", "Выбрать файл на этом компьютере"

@@ -22,6 +22,17 @@ def humanize_error(error: BaseException | Any) -> str:
         return "Прокси вернул неожиданный ответ. Повторите запрос или проверьте журнал."
     if isinstance(error, RPCError):
         message = str(error.message or error)
+        lowered = message.casefold()
+        if "no suitable utxo" in lowered or "no suitable utxo to split" in lowered:
+            return (
+                "Для загрузки нужен подтвержденный вход и якорь pstore. "
+                "Дождитесь синхронизации и пополните кошелек."
+            )
+        if "did not respond" in lowered or "read timed out" in lowered:
+            return (
+                "Узел не ответил вовремя: вероятно, идет синхронизация. "
+                "Повторите операцию позже."
+            )
         return message[:400]
     if isinstance(error, TimeoutError):
         return (
