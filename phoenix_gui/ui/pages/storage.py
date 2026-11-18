@@ -80,13 +80,14 @@ class StoragePage(ScrollPage):
         card.add(title)
 
         funds_hint = QLabel(
-            "Для загрузки нужен хотя бы один подтвержденный вход. "
-            "При пустом кошельке сначала перенесите средства."
+            "Для первой загрузки нужны два подтвержденных входа: один "
+            "дробится под pstore, второй остается для coinstake."
         )
         funds_hint.setObjectName("HintText")
         funds_hint.setWordWrap(True)
         funds_hint.setToolTip(
-            "pstore создает якорь на 1 сатоши и дробит подтвержденный UTXO"
+            "pstore создает якорь на 1 сатоши; один UTXO уходит в split, "
+            "второй нужен майнеру"
         )
         card.add(funds_hint)
 

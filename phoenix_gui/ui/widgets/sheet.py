@@ -7,6 +7,7 @@ from typing import Callable
 from PyQt6.QtCore import Qt, QEvent, QObject, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QApplication,
     QDialog,
     QFrame,
     QHBoxLayout,
@@ -33,9 +34,13 @@ class SheetHost(QWidget):
         self._widget: QWidget | None = None
         self._on_closed: Callable[[], None] | None = None
         self._closed = True
+        self._disabled: list[QWidget] = []
+        self._previous_focus: QWidget | None = None
         self._build()
         self.hide()
-        QShortcut(QKeySequence("Escape"), self, activated=self.close_sheet)
+        shortcut = QShortcut(QKeySequence("Escape"), self)
+        shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        shortcut.activated.connect(self.close_sheet)
 
     def _build(self) -> None:
         """Create the scrim, centered panel and empty content layout."""
@@ -92,6 +97,8 @@ class SheetHost(QWidget):
         self._widget = widget
         self._on_closed = on_closed
         self._closed = False
+        self._previous_focus = QApplication.focusWidget()
+        self._disable_background()
         self.setGeometry(self.parentWidget().rect())
         self.show()
         self.raise_()
@@ -129,8 +136,36 @@ class SheetHost(QWidget):
         self._on_closed = None
         self.hide()
         self.scrim.hide()
+        self._restore_background()
+        if self._previous_focus is not None:
+            try:
+                self._previous_focus.setFocus()
+            except RuntimeError:
+                pass
+            self._previous_focus = None
         if callback is not None:
             callback()
+
+    def _disable_background(self) -> None:
+        """Prevent keyboard focus from leaving the open sheet."""
+        window = self.window()
+        if window is None:
+            return
+        self._disabled = []
+        for name in ("sidebar", "content"):
+            widget = getattr(window, name, None)
+            if isinstance(widget, QWidget) and widget.isEnabled():
+                widget.setEnabled(False)
+                self._disabled.append(widget)
+
+    def _restore_background(self) -> None:
+        """Re-enable controls that were blocked by the sheet."""
+        for widget in self._disabled:
+            try:
+                widget.setEnabled(True)
+            except RuntimeError:
+                pass
+        self._disabled = []
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         """Keep the layer covering the whole parent and fit the panel."""

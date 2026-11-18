@@ -11,6 +11,7 @@ def humanize_error(error: BaseException | Any) -> str:
         RPCAuthError,
         RPCConnectionError,
         RPCProtocolError,
+        RPCRateLimitedError,
         RPCError,
     )
 
@@ -18,6 +19,11 @@ def humanize_error(error: BaseException | Any) -> str:
         return "Локальный прокси не отвечает. Запустите его или откройте журнал."
     if isinstance(error, RPCAuthError):
         return "Прокси отклонил логин или пароль. Проверьте настройки подключения."
+    if isinstance(error, RPCRateLimitedError):
+        return (
+            "Узел временно ограничил частоту запросов. "
+            "Повторите операцию через несколько секунд."
+        )
     if isinstance(error, RPCProtocolError):
         return "Прокси вернул неожиданный ответ. Повторите запрос или проверьте журнал."
     if isinstance(error, RPCError):

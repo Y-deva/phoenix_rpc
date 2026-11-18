@@ -73,7 +73,9 @@ class MigrationDialog(QDialog):
         self.setModal(True)
         self.setMinimumSize(720, 660)
         self._build(destination)
-        QShortcut(QKeySequence("Escape"), self, activated=self.reject)
+        escape = QShortcut(QKeySequence("Escape"), self)
+        escape.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        escape.activated.connect(self.reject)
 
     def _build(self, destination: str) -> None:
         """Build the fixed wizard layout."""
@@ -316,7 +318,10 @@ class MigrationDialog(QDialog):
         self._busy = busy
         self.scan_button.setEnabled(not busy)
         self.sweep_button.setEnabled(
-            not busy and self._report is not None and not self._sent
+            not busy
+            and self._report is not None
+            and self._report.balance > 0
+            and not self._sent
         )
         self.mode.setEnabled(not busy)
         self.progress.setVisible(busy)

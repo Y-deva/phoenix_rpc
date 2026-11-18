@@ -446,6 +446,36 @@ def cleanup_orphans(rpc_config):
         conn.close()
 
 
+def _rewind_parser(block_id):
+    """Rewind the parser to just before an orphaned block."""
+    last_parsed = read_height_file(LAST_PARSED_FILE, 0)
+    rewind_to = max(0, block_id - 1)
+    if rewind_to < last_parsed:
+        write_height_file(LAST_PARSED_FILE, rewind_to)
+        print(f"[ORPHAN] parser rewound to {rewind_to}")
+
+
+def verify_unconfirmed_blocks(rpc_config, current_height=None):
+    """Verify recently mined coinstakes and roll back shallow orphans.
+
+    Returns the highest orphaned block height, or None.
+    """
+    from block_verify import verify_unconfirmed_blocks as verify
+
+    if current_height is None:
+        try:
+            current_height = int(get_info(rpc_config)["blocks"])
+        except Exception as exc:
+            print(f"[ORPHAN] height unavailable: {exc}")
+            return None
+    return verify(
+        current_height,
+        lambda height: get_block_by_number(height, rpc_config),
+        get_block_hash=lambda height: get_block_hash(height, rpc_config),
+        on_orphan=_rewind_parser,
+    )
+
+
 # ---------- Основной цикл ----------
 
 
@@ -454,6 +484,8 @@ def run_parser_loop(rpc_config, interval=INTERVAL):
 
     script_map, script_map_rev = load_script_map()
     print(f"[UTXO] Loaded {len(script_map)} addresses")
+
+    verify_unconfirmed_blocks(rpc_config)
 
     result = cleanup_orphans(rpc_config)
     if result is not None:
@@ -484,6 +516,7 @@ def run_parser_loop(rpc_config, interval=INTERVAL):
 
             current_height = info["blocks"]
             write_height_file(LAST_KNOWN_FILE, current_height)
+            verify_unconfirmed_blocks(rpc_config, current_height)
 
             if os.path.exists(WALLET_CHANGED_FLAG):
                 os.remove(WALLET_CHANGED_FLAG)

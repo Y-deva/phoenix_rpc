@@ -34,9 +34,14 @@ class WalletPasswordDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(520)
         self._build()
-        QShortcut(QKeySequence("Escape"), self, activated=self.reject)
-        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._accept)
-        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._accept)
+        for sequence, callback in (
+            ("Escape", self.reject),
+            ("Ctrl+Return", self._accept),
+            ("Ctrl+Enter", self._accept),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(callback)
 
     def _build(self) -> None:
         """Create the compact security form."""

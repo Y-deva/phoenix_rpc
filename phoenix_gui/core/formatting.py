@@ -36,6 +36,7 @@ CATEGORY_KINDS = {
     "immature": "immature",
     "mined_pow": "mine",
     "mined_pos": "mine",
+    "orphan": "orphan",
 }
 
 

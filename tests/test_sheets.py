@@ -114,3 +114,12 @@ def test_migration_dialog_closes_without_leaving_scrim(window) -> None:
     dialog.reject()
     assert not window.sheet_host.isVisible()
     assert not window.sheet_host.scrim.isVisible()
+
+
+def test_sheet_blocks_background_and_restores_it(window) -> None:
+    """Keyboard focus cannot escape to pages while a sheet is open."""
+    assert window.content.isEnabled()
+    window.show_about()
+    assert not window.content.isEnabled()
+    window.close_sheet()
+    assert window.content.isEnabled()

@@ -220,21 +220,25 @@ class SortableTable(QTableWidget):
         self._refresh_empty()
 
     def filter_rows(self, text: str) -> int:
-        """Hide rows that do not contain the query; return visible count."""
-        query = (text or "").strip().casefold()
+        """Hide rows missing any whitespace-separated query term."""
+        terms = [term for term in (text or "").casefold().split() if term]
         visible = 0
         for row in range(self.rowCount()):
-            matched = not query
-            if query:
+            matched = True
+            for term in terms:
+                found = False
                 for column in range(self.columnCount()):
                     item = self.item(row, column)
-                    if item is not None and query in item.text().casefold():
-                        matched = True
+                    if item is not None and term in item.text().casefold():
+                        found = True
                         break
                     tooltip = item.toolTip() if item is not None else ""
-                    if query in tooltip.casefold():
-                        matched = True
+                    if term in tooltip.casefold():
+                        found = True
                         break
+                if not found:
+                    matched = False
+                    break
             self.setRowHidden(row, not matched)
             visible += int(matched)
         self._refresh_empty()

@@ -1,9 +1,15 @@
 """RPC client, models and service parsing."""
 
 from decimal import Decimal
+from types import SimpleNamespace
 
+import pytest
 
-from phoenix_gui.rpc.client import RPCClient, RPCError
+from phoenix_gui.rpc.client import (
+    RPCClient,
+    RPCError,
+    RPCRateLimitedError,
+)
 from phoenix_gui.rpc.models import Transaction, Utxo
 from phoenix_gui.rpc.service import WalletService, balance_summary
 
@@ -266,3 +272,29 @@ def test_node_snapshot_collects_mining_and_connections():
         "errors": "",
         "peers": 7,
     }
+
+
+def test_rate_limit_uses_retry_after_and_blocks_immediate_retry(monkeypatch):
+    """A 429 must establish a cooldown without resetting on the next call."""
+    client = RPCClient("http://127.0.0.1:1", "user", "pass")
+    response = SimpleNamespace(
+        status_code=429,
+        headers={"Retry-After": "7"},
+        reason="Too Many Requests",
+        text="{}",
+        json=lambda: {},
+    )
+    attempts = []
+    monkeypatch.setattr(
+        client,
+        "_session",
+        lambda: SimpleNamespace(
+            post=lambda *args, **kwargs: attempts.append(1) or response
+        ),
+    )
+    with pytest.raises(RPCRateLimitedError) as first:
+        client.call("getinfo")
+    assert first.value.retry_after == 7
+    with pytest.raises(RPCRateLimitedError):
+        client.call("getinfo")
+    assert len(attempts) == 1

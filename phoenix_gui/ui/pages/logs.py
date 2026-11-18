@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer, QUrl, Qt
-from PyQt6.QtGui import QDesktopServices, QFontDatabase
+from PyQt6.QtGui import QDesktopServices, QFontDatabase, QTextCursor
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -174,9 +174,23 @@ class LogsPage(BasePage):
             lines = [line for line in lines if query in line.lower()]
         bar = self.view.verticalScrollBar()
         at_bottom = bar.value() >= bar.maximum() - 4
+        scroll_value = bar.value()
+        cursor = self.view.textCursor()
+        cursor_position = cursor.position()
+        anchor = cursor.anchor()
         self.view.setPlainText("\n".join(lines))
         if self.follow.isChecked() and at_bottom:
             bar.setValue(bar.maximum())
+        else:
+            # Keep the reader's place when live refresh adds new lines.
+            restored = self.view.textCursor()
+            restored.setPosition(min(anchor, len(self.view.toPlainText())))
+            restored.setPosition(
+                min(cursor_position, len(self.view.toPlainText())),
+                QTextCursor.MoveMode.KeepAnchor,
+            )
+            self.view.setTextCursor(restored)
+            bar.setValue(min(scroll_value, bar.maximum()))
         path = log_file()
         size = path.stat().st_size if path.is_file() else 0
         self.footer.setText(

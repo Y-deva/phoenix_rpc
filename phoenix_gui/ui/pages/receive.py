@@ -283,8 +283,11 @@ class ReceivePage(ScrollPage):
             QTimer.singleShot(250, lambda: self._generate("Основной"))
 
     def _render_table(self) -> None:
-        """Rebuild rows while preserving the filter."""
+        """Rebuild rows while preserving filter, sort and selection."""
         query = self.search.text()
+        header = self.table.horizontalHeader()
+        sort_column = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
         rows = []
         for item in self._addresses:
             address_cell = text_item(
@@ -336,9 +339,14 @@ class ReceivePage(ScrollPage):
                 ]
             )
         self.table.set_rows(rows)
-        self.table.end_update(2, ascending=False)
-        if query:
-            self.table.filter_rows(query)
+        if sort_column >= 0:
+            self.table.sortItems(sort_column, sort_order)
+        else:
+            self.table.sortItems(2, Qt.SortOrder.DescendingOrder)
+        query = self.search.text()
+        account = self.account_filter.currentData() or ""
+        if query or account:
+            self.table.filter_rows(f"{query} {account}".strip())
         total = sum((item.balance for item in self._addresses), Decimal("0"))
         self.footer.setText(
             f"Показано {len(self._addresses)} адресов на {format_nvc(total)}. "
@@ -389,15 +397,18 @@ class ReceivePage(ScrollPage):
     def _sync_accounts(self) -> None:
         """Refresh the account selector without losing the current choice."""
         selected = self.account_filter.currentData() or ""
+        preferred = self._pending_account or selected
         accounts = self._accounts()
         self.account_filter.blockSignals(True)
         self.account_filter.clear()
         self.account_filter.addItem(self.tr_text("Все счета"), "")
         for account in accounts:
             self.account_filter.addItem(self.tr_text(account), account)
-        index = self.account_filter.findData(selected)
+        index = self.account_filter.findData(preferred)
         self.account_filter.setCurrentIndex(max(0, index))
         self.account_filter.blockSignals(False)
+        if self._pending_account and index >= 0:
+            self._pending_account = ""
 
     def _on_account_filter(self, _index: int) -> None:
         """Filter the address table by account and pick an address from it."""

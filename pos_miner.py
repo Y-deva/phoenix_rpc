@@ -1,28 +1,26 @@
 import hashlib
+import json
 import struct
 import time
 import requests
 
 from db import get_db_connection
-from helpers import push_data, varint, SIGHASH_ALL, ONE_COIN
 from kernel_math import (
     check_stake_kernel_hash,
     get_coin_age,
     get_proof_of_stake_reward,
     get_next_target_required_pos,
     compute_tx_offset,
-    sha256d,
     nStakeMinAge,
     nModifierInterval,
     nCoinbaseMaturity,
     CENT,
-    COIN,
     F_TESTNET,
 )
 from ecdsa_sign import sign_block_hash
 from newaddress import generate_address
-from pos_coinstake import build_coinstake, HARDCODED_PUBKEY, p2pk_script, p2sh_script
-from pos_block import build_empty_coinbase, build_pos_block, BLOCK_VERSION
+from pos_coinstake import build_coinstake
+from pos_block import build_empty_coinbase, build_pos_block
 from scrypt_hash import scrypt_blockhash
 
 SEARCH_INTERVAL = 60
@@ -190,7 +188,7 @@ def _find_kernel_solution(rpc_config, utxo, n_bits, now_ts):
         except Exception:
             vtx_hex.append("")
     if kernel_index is None:
-        print(f"[POS] kernel txid not found in block tx list")
+        print("[POS] kernel txid not found in block tx list")
         return None
     offset = compute_tx_offset(vtx_hex, kernel_index)
 
@@ -323,7 +321,11 @@ def _drop_chains(chain_ids):
         c = conn.cursor()
         c.execute("BEGIN IMMEDIATE")
         for cid in chain_ids:
-            c.execute("DELETE FROM priority_txs WHERE chain_id=?", (cid,))
+            c.execute(
+                "DELETE FROM priority_txs "
+                "WHERE chain_id=? AND confirmed_height IS NULL",
+                (cid,),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -340,6 +342,7 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
             SELECT txid, chain_id, kind, seq, raw,
                    prev_txid, prev_vout, size, n_time
             FROM priority_txs
+            WHERE confirmed_height IS NULL
             ORDER BY added_at ASC, seq ASC
             LIMIT 1
         """)
@@ -417,7 +420,8 @@ def _collect_next_pstore(rpc_config, n_time, used_inputs, budget):
             c.execute(
                 """SELECT txid, raw, prev_txid, prev_vout, size
                          FROM priority_txs
-                         WHERE chain_id=? AND seq=1""",
+                         WHERE chain_id=? AND seq=1
+                           AND confirmed_height IS NULL""",
                 (chain_id,),
             )
             nxt = c.fetchone()
@@ -455,13 +459,42 @@ def _on_pstore_confirmed(txid, height):
                 "UPDATE utxos SET spent=1 WHERE txid=? AND vout=?", (row[0], row[1])
             )
 
-        c.execute("DELETE FROM priority_txs WHERE txid=?", (txid,))
+        c.execute(
+            "UPDATE priority_txs SET confirmed_height=? WHERE txid=?",
+            (height, txid),
+        )
 
         c.execute(
             """UPDATE pstore_anchor
                      SET confirmed=1, updated_at=strftime('%s','now')
                      WHERE id=1 AND txid=?""",
             (txid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _record_unconfirmed_block(
+    height, txid, input_txid, input_vout, block_hash, pstore_txids
+):
+    """Remember a newly mined coinstake until it is deeply confirmed."""
+    conn = get_db_connection()
+    try:
+        c = conn.cursor()
+        c.execute(
+            """INSERT OR REPLACE INTO unconfirmed_blocks
+                     (txid, block_id, input_txid, input_vout,
+                      block_hash, pstore_txids)
+                     VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                txid,
+                height,
+                input_txid,
+                input_vout,
+                block_hash,
+                json.dumps(list(pstore_txids)),
+            ),
         )
         conn.commit()
     finally:
@@ -483,7 +516,9 @@ def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
         return
 
     pubkey_hash = hashlib.sha256(_FALCON_PUBKEY).digest()
-    rpc_call = lambda m, p: _rpc(rpc_config, m, p)
+
+    def rpc_call(method, params):
+        return _rpc(rpc_config, method, params)
 
     while True:
         try:
@@ -608,8 +643,35 @@ def run_pos_miner(rpc_config, interval=LOOP_INTERVAL):
                             f"[POS] Block {height + 1} accepted! "
                             f"reward → {addr_info['address']}"
                         )
-                        for t in picked_txids:
-                            _on_pstore_confirmed(t, height + 1)
+                        try:
+                            block_hash = _rpc(rpc_config, "getblockhash", [height + 1])
+                        except Exception:
+                            block_hash = None
+                        recorded = False
+                        for _attempt in range(2):
+                            try:
+                                _record_unconfirmed_block(
+                                    height + 1,
+                                    cst["txid"],
+                                    utxo["txid"],
+                                    utxo["vout"],
+                                    block_hash,
+                                    picked_txids,
+                                )
+                                recorded = True
+                                break
+                            except Exception as exc:
+                                print(
+                                    f"[POS] WARN could not record mined block "
+                                    f"{height + 1}: {exc}"
+                                )
+                                time.sleep(0.5)
+                        if not recorded:
+                            print(
+                                "[POS] CRITICAL: block accepted without a "
+                                "rollback record; stopping miner"
+                            )
+                            return
                         found = True
                         break
                     else:

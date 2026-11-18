@@ -166,6 +166,8 @@ class Transaction:
     @property
     def status(self) -> str:
         """Return one of confirmed, pending, immature or conflicted."""
+        if self.category == "orphan":
+            return "orphaned"
         if self.category == "immature":
             return "immature"
         if self.confirmations < 0:
@@ -182,6 +184,7 @@ class Transaction:
             "pending": "В обработке",
             "immature": "Не созрело",
             "conflicted": "Конфликт",
+            "orphaned": "Орфан",
         }.get(self.status, self.status)
 
     @property
@@ -192,6 +195,7 @@ class Transaction:
             "pending": "warning",
             "immature": "warning",
             "conflicted": "danger",
+            "orphaned": "danger",
         }.get(self.status, "neutral")
 
 

@@ -407,7 +407,7 @@ class PasswordField(QLineEdit):
         """Initialize the PasswordField instance."""
         super().__init__(parent)
         self.setEchoMode(QLineEdit.EchoMode.Password)
-        self.setToolTip("Пароль для подключения к локальному прокси")
+        self.setToolTip("Скрытое значение: пароль или приватный ключ")
         self._color = "#A7B1C2"
         self._action = self.addAction(
             icon("eye", self._color, 16), QLineEdit.ActionPosition.TrailingPosition

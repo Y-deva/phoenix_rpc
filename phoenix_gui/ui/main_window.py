@@ -232,11 +232,12 @@ class MainWindow(QMainWindow):
         shell = QHBoxLayout(self.backdrop)
         shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(0)
-        shell.addWidget(self._build_sidebar())
+        self.sidebar = self._build_sidebar()
+        shell.addWidget(self.sidebar)
 
-        content = QWidget()
-        content.setObjectName("Content")
-        content_layout = QVBoxLayout(content)
+        self.content = QWidget()
+        self.content.setObjectName("Content")
+        content_layout = QVBoxLayout(self.content)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
         content_layout.addWidget(self._build_header())
@@ -246,7 +247,7 @@ class MainWindow(QMainWindow):
         self.stack.setObjectName("PageStack")
         content_layout.addWidget(self.stack, 1)
         content_layout.addWidget(self._build_footer())
-        shell.addWidget(content, 1)
+        shell.addWidget(self.content, 1)
 
     def _build_sidebar(self) -> QWidget:
         """Create brand, navigation groups and daemon state."""
@@ -447,6 +448,7 @@ class MainWindow(QMainWindow):
             page.busyChanged.connect(self._on_page_busy)
             page.navigateRequested.connect(self.navigate)
             page.transactionSelected.connect(self._open_transaction)
+            page.dataChanged.connect(lambda source=page: self._on_data_changed(source))
         self._pages["coins"].sendRequested.connect(self._on_coins_send_requested)
         settings_page = self._pages["settings"]
         settings_page.connectionChanged.connect(self._on_connection_settings)
@@ -461,6 +463,15 @@ class MainWindow(QMainWindow):
             if self.settings.last_page in self._pages
             else "overview"
         )
+
+    def _on_data_changed(self, source) -> None:
+        """Invalidate other pages after a send or address mutation."""
+        for page in self._pages.values():
+            if page is not source and hasattr(page, "mark_stale"):
+                page.mark_stale()
+        current = self.current_page
+        if current is not None and current is not source:
+            current.refresh()
 
     @staticmethod
     def _log_backend(source: str, chunk: str) -> None:
@@ -618,6 +629,7 @@ class MainWindow(QMainWindow):
         self._proxy.failed.connect(lambda message: LOGGER.error("proxy: %s", message))
         self._proxy.ready.connect(self._on_proxy_ready)
         self._proxy.failed.connect(self._on_proxy_failed)
+        self._pages["settings"].set_proxy_controls("stopped")
         self._proxy.stopped.connect(lambda _code: self._check_connection())
 
     def _build_daemon(self) -> None:
@@ -1132,6 +1144,9 @@ class MainWindow(QMainWindow):
             "#A7B1C2",
         )
         self._pages["settings"].set_proxy_status(text, color)
+        self._pages["settings"].set_proxy_controls(
+            state, bool(self._proxy is not None and self._proxy.owned)
+        )
 
     def _on_proxy_ready(self, external: bool) -> None:
         """Reconnect all pages once the proxy endpoint answers."""
@@ -1205,6 +1220,8 @@ class MainWindow(QMainWindow):
                 "демон",
                 "502",
                 "503",
+                "429",
+                "частот",
             )
         )
         # One connectivity toast until a successful check: the banner and

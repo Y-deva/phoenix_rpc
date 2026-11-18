@@ -266,6 +266,7 @@ class TransactionsPage(BasePage):
                 "send": self.tokens.get("accent", "#FF8A3D"),
                 "mine": self.tokens.get("warning", "#F3C969"),
                 "immature": self.tokens.get("warning", "#F3C969"),
+                "orphan": self.tokens.get("negative", "#FF7070"),
             }.get(transaction.kind, self.tokens.get("muted", "#A7B1C2"))
             category_text = self.tr_text(category_label(transaction.category))
             type_item = text_item(
@@ -301,8 +302,15 @@ class TransactionsPage(BasePage):
                 "pending": self.tokens.get("warning", "#F3C969"),
                 "immature": self.tokens.get("warning", "#F3C969"),
                 "conflicted": self.tokens.get("negative", "#FF7070"),
+                "orphaned": self.tokens.get("negative", "#FF7070"),
             }.get(transaction.status, self.tokens.get("muted", "#A7B1C2"))
-            status_rank = {"confirmed": 0, "pending": 1, "immature": 2, "conflicted": 3}
+            status_rank = {
+                "confirmed": 0,
+                "pending": 1,
+                "immature": 2,
+                "conflicted": 3,
+                "orphaned": 4,
+            }
             self.table.setItem(
                 row,
                 4,

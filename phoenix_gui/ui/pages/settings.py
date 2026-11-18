@@ -530,6 +530,7 @@ class SettingsPage(ScrollPage):
         self.user_edit.editingFinished.connect(self._save_connection)
         form.addRow("Пользователь", self.user_edit)
         self.password_edit = PasswordField()
+        self.password_edit.setToolTip("Пароль для подключения к локальному прокси")
         self.password_edit.setPlaceholderText("Пароль прокси")
         self.password_edit.editingFinished.connect(self._save_connection)
         form.addRow("Пароль", self.password_edit)
@@ -665,6 +666,20 @@ class SettingsPage(ScrollPage):
         hint.setObjectName("HintText")
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+    def set_proxy_controls(self, state: str, owned: bool = False) -> None:
+        """Enable only proxy actions that make sense in the current state."""
+        self.proxy_start_button.setEnabled(state in {"stopped", "missing", "failed"})
+        self.proxy_stop_button.setEnabled(state == "running" and owned)
+        self.proxy_restart_button.setEnabled(state in {"running", "failed", "missing"})
+        if state == "running" and not owned:
+            self.proxy_stop_button.setToolTip(
+                "Прокси запущен вне этого окна; остановить его можно вручную"
+            )
+        else:
+            self.proxy_stop_button.setToolTip(
+                "Остановить прокси, запущенный этим окном"
+            )
 
     def set_proxy_status(self, text: str, color: str | None = None) -> None:
         """Show the local proxy lifecycle on the settings page."""
@@ -1106,9 +1121,21 @@ class SettingsPage(ScrollPage):
         """Persist proxy credentials and notify the shell."""
         if self._syncing:
             return
-        self.settings.set("connection/proxy_url", self.proxy_edit.text().strip())
-        self.settings.set("connection/proxy_user", self.user_edit.text().strip())
-        self.settings.set("connection/proxy_password", self.password_edit.text())
+        values = (
+            self.proxy_edit.text().strip(),
+            self.user_edit.text().strip(),
+            self.password_edit.text(),
+        )
+        previous = (
+            str(self.settings.get("connection/proxy_url") or ""),
+            str(self.settings.get("connection/proxy_user") or ""),
+            str(self.settings.get("connection/proxy_password") or ""),
+        )
+        if values == previous:
+            return
+        self.settings.set("connection/proxy_url", values[0])
+        self.settings.set("connection/proxy_user", values[1])
+        self.settings.set("connection/proxy_password", values[2])
         self.connectionChanged.emit()
 
     def _test_connection(self) -> None:

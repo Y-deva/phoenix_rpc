@@ -303,8 +303,10 @@ class SendPage(ScrollPage):
         self.send_button.setEnabled(False)
         self.send_button.clicked.connect(self._confirm_and_send)
         card.add(self.send_button)
-        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._confirm_and_send)
-        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._confirm_and_send)
+        for sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._confirm_and_send)
         self.privacy_note = QLabel(
             "Подпись выполняется локально в прокси. Приватные ключи не передаются."
         )

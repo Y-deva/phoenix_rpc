@@ -88,6 +88,7 @@ def test_receive_generate_and_create_account(
     page.account_input.setText("Работа")
     page.create_account_button.click()
     qtbot.waitUntil(lambda: len(service.addresses) == 3, timeout=2500)
+    qtbot.waitUntil(lambda: page.account_filter.count() == 3, timeout=2500)
 
     assert service.created_accounts == ["Основной", "", "Работа"]
     assert [

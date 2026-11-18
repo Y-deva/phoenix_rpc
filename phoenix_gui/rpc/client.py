@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 import threading
 from typing import Any, Callable, Sequence
 
@@ -47,6 +48,15 @@ class RPCProtocolError(RPCError):
     """Raised when the proxy returns a malformed response."""
 
 
+class RPCRateLimitedError(RPCError):
+    """Raised when the backend asks the client to slow down."""
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        """Store the server cooldown without resetting it on each retry."""
+        super().__init__(message, code=429)
+        self.retry_after = max(0.0, float(retry_after))
+
+
 class RPCClient:
     """Minimal JSON-RPC 1.0 client with per-thread HTTP sessions."""
 
@@ -67,6 +77,9 @@ class RPCClient:
         self._local = threading.local()
         self._id_lock = threading.Lock()
         self._request_id = 0
+        self._limit_lock = threading.Lock()
+        self._limited_until = 0.0
+        self._limit_streak = 0
 
     def _next_id(self) -> int:
         """Return a monotonically increasing request id."""
@@ -108,6 +121,13 @@ class RPCClient:
         if self._transport is not None:
             return self._transport(method, payload_params)
 
+        with self._limit_lock:
+            remaining = self._limited_until - time.monotonic()
+            if remaining > 0:
+                raise RPCRateLimitedError(
+                    "Слишком много запросов к узлу; повторите позже",
+                    remaining,
+                )
         payload = {
             "jsonrpc": "1.0",
             "id": self._next_id(),
@@ -133,6 +153,23 @@ class RPCClient:
             raise RPCAuthError(
                 "Backend rejected the credentials", code=response.status_code
             )
+        if response.status_code == 429:
+            retry_after = 0.0
+            try:
+                retry_after = float(response.headers.get("Retry-After", "0"))
+            except (TypeError, ValueError):
+                retry_after = 0.0
+            with self._limit_lock:
+                self._limit_streak += 1
+                delay = max(
+                    retry_after,
+                    min(60.0, float(2**self._limit_streak)),
+                )
+                self._limited_until = time.monotonic() + delay
+            raise RPCRateLimitedError(
+                "Узел ограничил частоту запросов (429); клиент временно снизил темп",
+                delay,
+            )
         if response.status_code >= 400:
             message = self._extract_error(response)
             raise RPCProtocolError(message, code=response.status_code)
@@ -155,6 +192,9 @@ class RPCClient:
             raise RPCError(str(error))
         if "result" not in data:
             raise RPCProtocolError("Backend response does not contain a result")
+        with self._limit_lock:
+            self._limit_streak = 0
+            self._limited_until = 0.0
         return data["result"]
 
     @staticmethod
