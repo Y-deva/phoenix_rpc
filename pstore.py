@@ -6,7 +6,7 @@ import hashlib
 import requests
 import oqs
 
-from db import get_db_connection
+from db import get_db_connection, wallet_owns_redeem_script
 from helpers import (
     hash160,
     base58check_encode,
@@ -234,6 +234,16 @@ def _validate_anchor(c, anchor):
         return None
 
     txid, vout = anchor["txid"], anchor["vout"]
+    if not wallet_owns_redeem_script(c, anchor["redeem_script"]):
+        print("[PSTORE] anchor does not belong to this wallet — resetting")
+        c.execute(
+            """UPDATE pstore_anchor
+               SET txid=NULL, vout=NULL, redeem_script=NULL,
+                   address=NULL, confirmed=0,
+                   updated_at=strftime('%s','now')
+               WHERE id=1"""
+        )
+        return None
 
     c.execute("SELECT confirmed_height FROM priority_txs WHERE txid=?", (txid,))
     row = c.fetchone()
@@ -279,6 +289,10 @@ def _try_adopt_existing_anchor(c):
         WHERE u.spent=0
           AND u.amount = ?
           AND u.block_height IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM wallets w
+              WHERE w.redeem_script = u.redeem_script
+          )
           AND NOT EXISTS (
               SELECT 1 FROM priority_txs p
               WHERE p.prev_txid = u.txid AND p.prev_vout = u.vout

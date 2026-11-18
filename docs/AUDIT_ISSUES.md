@@ -112,9 +112,9 @@ GitHub Issues в репозитории отключены: API возвраща
 
 ### AUD-18. Адресация pstore-якоря не ограничена
 - Серьёзность: medium.
-- Причина: `_try_adopt_existing_anchor` может принять чужой/старый anchor по одному признаку подтверждённости.
-- Текущая мера: tip-anchor не сбрасывается при обычном upload; reindex очищает pending.
-- План: хранить identity anchor (txid/vout) и принимать только собственный подтверждённый anchor.
+- Статус: исправлено.
+- Причина: `_try_adopt_existing_anchor` мог принять чужой 1-sat выход как anchor.
+- Исправление: `_try_adopt_existing_anchor` принимает только redeem_script из таблицы `wallets`; `_validate_anchor` дополнительно сбрасывает якорь, если его скрипт больше не принадлежит кошельку. Проверка: `tests/test_orphans.py::test_anchor_script_must_belong_to_wallet`.
 
 ### AUD-19. Прокси: allowlist, Basic auth и HTTP-коды
 - Серьёзность: low/security.
@@ -123,15 +123,15 @@ GitHub Issues в репозитории отключены: API возвраща
 
 ## Проверки
 
-- `python -m pytest -q`: 159 тестов, все проходят.
+- `python -m pytest -q`: 162 теста, все проходят.
 - `ruff format --check` и `ruff check --select E,W,F,E501`: чисто.
 - Отдельно проверены: орфан-откат, финализация 520, pstore reindex, hash mismatch, 429/Retry-After, модальность sheet, receive account filter.
 
 ### AUD-20. Жёсткие цвета вторичных виджетов
 - Серьёзность: low.
-- Статус: частично исправлено.
+- Статус: исправлено.
 - Причина: `amount_item()` и `Toast` содержали литеральные цвета, рассчитанные на тёмную тему; в светлой теме контраст мог быть недостаточным.
-- Исправление: `amount_item()` принимает positive/negative из темы; `ToastManager` получает цвета из `ThemeManager` и обновляет их при смене темы. Остались дефолтные цвета иконок `fields.py`; они переопределяются страницами, но базовые значения стоит вынести в токены.
+- Исправление: `amount_item()` принимает positive/negative из темы; `ToastManager` получает цвета из `ThemeManager` и обновляет их при смене темы. `SearchField`, `CopyLineEdit`, `CopyButton` и `PasswordField` берут базовый цвет иконки из `QPalette.PlaceholderText`, а не из тёмного литерала.
 - Проверка: `tests/test_ui.py`, `tests/test_appearance.py`.
 
 ### AUD-21. Storage и ошибки pstore показывают сырой текст

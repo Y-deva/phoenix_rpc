@@ -221,3 +221,21 @@ def test_pstore_package_only_confirms_when_txids_are_in_block(temp_db):
         )
     finally:
         conn.close()
+
+
+def test_anchor_script_must_belong_to_wallet(temp_db):
+    """Pstore must not adopt an external 1-sat output as its anchor."""
+    conn = sqlite3.connect(temp_db)
+    cursor = conn.cursor()
+    try:
+        assert not db.wallet_owns_redeem_script(cursor, b"foreign")
+        conn.execute(
+            "INSERT INTO wallets (salt, redeem_script, script_hash, address) "
+            "VALUES (?, ?, ?, ?)",
+            (b"salt", b"owned", b"hash", "addr"),
+        )
+        conn.commit()
+        assert db.wallet_owns_redeem_script(cursor, b"owned")
+        assert not db.wallet_owns_redeem_script(cursor, b"foreign")
+    finally:
+        conn.close()

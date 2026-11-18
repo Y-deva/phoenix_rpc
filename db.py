@@ -21,6 +21,14 @@ def checkpoint_wal():
     conn.close()
 
 
+def wallet_owns_redeem_script(c, redeem_script: bytes) -> bool:
+    """Return whether a redeem script belongs to a generated wallet address."""
+    c.execute(
+        "SELECT 1 FROM wallets WHERE redeem_script=? LIMIT 1", (bytes(redeem_script),)
+    )
+    return c.fetchone() is not None
+
+
 def _column_exists(c, table: str, column: str) -> bool:
     c.execute(f"PRAGMA table_info({table})")
     return any(row[1] == column for row in c.fetchall())
