@@ -396,6 +396,8 @@ class SendPage(ScrollPage):
                     incoming=True,
                     mono_font=self.themes.mono_family,
                     signed=False,
+                    positive=self.tokens.get("positive", "#3DD6A0"),
+                    negative=self.tokens.get("negative", "#FF7070"),
                 ),
             )
             self.coin_table.setItem(

@@ -286,6 +286,8 @@ class TransactionsPage(BasePage):
                     incoming=transaction.amount >= 0,
                     mono_font=mono,
                     signed=True,
+                    positive=self.tokens.get("positive", "#3DD6A0"),
+                    negative=self.tokens.get("negative", "#FF7070"),
                 ),
             )
             confirm_item = SortItem(

@@ -225,6 +225,11 @@ class StoragePage(ScrollPage):
         self.cancel_button.setToolTip("Удалить неподтвержденные pstore-транзакции")
         self.cancel_button.clicked.connect(self._cancel_pending)
         card.add(self.cancel_button, 0)
+        self.cancel_status = QLabel("")
+        self.cancel_status.setObjectName("HintText")
+        self.cancel_status.setWordWrap(True)
+        self.cancel_status.setVisible(False)
+        card.add(self.cancel_status)
         return card
 
     def apply_theme(self) -> None:
@@ -394,12 +399,13 @@ class StoragePage(ScrollPage):
         self.notify("Файл получен из pstore", 4000)
 
     def _download_failed(self, error: object) -> None:
-        """Report a download error."""
-        self.download_status.setText(f"Ошибка: {error}")
+        """Report a download error with the same wording as upload errors."""
+        message = humanize_error(error)
+        self.download_status.setText(f"Ошибка: {message}")
         self.download_status.setProperty("error", True)
         self._refresh_style(self.download_status)
         self.download_progress.finish("Ошибка")
-        self.errorRaised.emit(str(error))
+        self.errorRaised.emit(message)
 
     def _download_finished(self) -> None:
         """Release download controls."""
@@ -443,11 +449,17 @@ class StoragePage(ScrollPage):
         """Report how many queued transactions were removed."""
         data = result if isinstance(result, dict) else {}
         count = int(data.get("cancelled", 0) or 0)
+        self.cancel_status.setVisible(False)
         self.notify(f"Отменено транзакций: {count}", 4000)
 
     def _cancel_failed(self, error: object) -> None:
-        """Report a cancellation error."""
-        self.errorRaised.emit(str(error))
+        """Report a cancellation error without leaking a raw traceback."""
+        message = humanize_error(error)
+        self.cancel_status.setText(f"Ошибка: {message}")
+        self.cancel_status.setVisible(True)
+        self.cancel_status.setProperty("error", True)
+        self._refresh_style(self.cancel_status)
+        self.errorRaised.emit(message)
 
     def _cancel_finished(self) -> None:
         """Release the cancel button."""

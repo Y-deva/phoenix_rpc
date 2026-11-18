@@ -315,6 +315,8 @@ def amount_item(
     mono_font: str = "",
     signed: bool = True,
     places: int = 8,
+    positive: str = "#3DD6A0",
+    negative: str = "#FF7070",
 ) -> SortItem:
     """Build a right aligned, color coded amount cell."""
     if signed:
@@ -327,7 +329,7 @@ def amount_item(
     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     if mono_font:
         item.setFont(QFont(mono_font))
-    color = "#3DD6A0" if incoming else "#FF7070"
+    color = positive if incoming else negative
     item.setForeground(QBrush(QColor(color)))
     return item
 

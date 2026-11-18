@@ -225,6 +225,7 @@ class MainWindow(QMainWindow):
         self.toast = ToastManager(
             self.backdrop,
             animations=bool(self.settings.animations),
+            colors=self._toast_colors(),
         )
 
     def _build_shell(self) -> None:
@@ -1417,6 +1418,7 @@ class MainWindow(QMainWindow):
         logo = brand_logo(38)
         self.brand_label.setPixmap(logo if not logo.isNull() else brand_mark(theme, 38))
         self.backdrop.set_theme(theme)
+        self.toast.set_colors(self._toast_colors())
         muted = theme.color("muted")
         self.refresh_button.setIcon(icon("refresh", muted, 18))
         self.theme_button.setIcon(icon("sun" if theme.dark else "moon", muted, 18))
@@ -1432,6 +1434,19 @@ class MainWindow(QMainWindow):
         for page in self._pages.values():
             if hasattr(page, "apply_theme"):
                 page.apply_theme()
+
+    def _toast_colors(self) -> dict[str, str]:
+        """Return status colors from the active theme."""
+        tokens = self.themes.tokens
+        return {
+            level: tokens.get(level, fallback)
+            for level, fallback in {
+                "success": "#3DD6A0",
+                "error": "#FF7070",
+                "warning": "#F2C86B",
+                "info": "#73BEFF",
+            }.items()
+        }
 
     def _update_nav_icons(self) -> None:
         """Tint navigation icons according to active state."""

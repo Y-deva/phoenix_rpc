@@ -58,10 +58,13 @@ class Toast(QFrame):
         duration: int = 4200,
         parent: QWidget | None = None,
         animations: bool = True,
+        colors: dict[str, str] | None = None,
     ) -> None:
         """Initialize the Toast instance."""
         super().__init__(parent)
         self._animations = animations
+        self._colors = dict(LEVEL_COLORS)
+        self._colors.update(colors or {})
         self.setObjectName(OBJECT_NAMES.get(level, "ToastInfo"))
         self.setFixedWidth(360)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
@@ -72,7 +75,7 @@ class Toast(QFrame):
         layout.setSpacing(10)
         self.icon_label = QLabel(self)
         self.icon_label.setPixmap(
-            icon(LEVEL_ICONS[self._level], LEVEL_COLORS[self._level], 18).pixmap(18, 18)
+            icon(LEVEL_ICONS[self._level], self._colors[self._level], 18).pixmap(18, 18)
         )
         self.icon_label.setFixedSize(24, 24)
         self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -164,11 +167,14 @@ class ToastManager(QObject):
         host: QWidget,
         parent: QObject | None = None,
         animations: bool = True,
+        colors: dict[str, str] | None = None,
     ) -> None:
         """Initialize the ToastManager instance."""
         super().__init__(parent)
         self._host = host
         self._animations = animations
+        self._colors = dict(LEVEL_COLORS)
+        self._colors.update(colors or {})
         self._toasts: list[Toast] = []
         self._host.installEventFilter(self)
 
@@ -177,6 +183,19 @@ class ToastManager(QObject):
         self._animations = bool(enabled)
         for toast in self._toasts:
             toast._animations = self._animations
+
+    def set_colors(self, colors: dict[str, str]) -> None:
+        """Update icon colors after a theme switch."""
+        self._colors.update(colors)
+        for toast in self._toasts:
+            toast._colors.update(colors)
+            toast.icon_label.setPixmap(
+                icon(
+                    LEVEL_ICONS[toast._level],
+                    toast._colors[toast._level],
+                    18,
+                ).pixmap(18, 18)
+            )
 
     def show(
         self,
@@ -198,6 +217,7 @@ class ToastManager(QObject):
             duration,
             self._host,
             animations=self._animations,
+            colors=self._colors,
         )
         toast.closed.connect(self._on_closed)
         self._toasts.append(toast)
