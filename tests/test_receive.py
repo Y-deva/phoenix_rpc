@@ -69,7 +69,7 @@ def test_receive_page_auto_creates_first_address(
     )
     assert service.created_accounts == ["Основной"]
     assert page.table.rowCount() == 1
-    assert page.qr._matrix
+    qtbot.waitUntil(lambda: bool(page.qr._matrix), timeout=2500)
 
 
 def test_receive_generate_and_create_account(
