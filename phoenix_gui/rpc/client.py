@@ -11,12 +11,36 @@ import json
 import socket
 import time
 import threading
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Sequence
 
 import requests
 from requests.auth import HTTPBasicAuth
 
 Transport = Callable[[str, Sequence[Any]], Any]
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    """Parse both numeric and HTTP-date forms of ``Retry-After``.
+
+    Invalid or past values return zero. The caller caps the final delay.
+    """
+    if not value:
+        return 0.0
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        moment = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if moment is None:
+        return 0.0
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return max(0.0, (moment - datetime.now(timezone.utc)).total_seconds())
 
 
 class RPCError(Exception):
@@ -154,17 +178,14 @@ class RPCClient:
                 "Backend rejected the credentials", code=response.status_code
             )
         if response.status_code == 429:
-            retry_after = 0.0
-            try:
-                retry_after = float(response.headers.get("Retry-After", "0"))
-            except (TypeError, ValueError):
-                retry_after = 0.0
+            retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
             with self._limit_lock:
                 self._limit_streak += 1
-                delay = max(
-                    retry_after,
-                    min(60.0, float(2**self._limit_streak)),
-                )
+                # Cap both the exponent and the server-provided delay: a
+                # bogus far-future HTTP date must not disable the wallet for
+                # years.
+                backoff = min(60.0, float(2 ** min(self._limit_streak, 6)))
+                delay = min(300.0, max(retry_after, backoff))
                 self._limited_until = time.monotonic() + delay
             raise RPCRateLimitedError(
                 "Узел ограничил частоту запросов (429); клиент временно снизил темп",

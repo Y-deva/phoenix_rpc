@@ -8,6 +8,7 @@ characters, so no emoji, fancy arrows or typographic dashes are used.
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Iterable
@@ -15,6 +16,7 @@ from typing import Any, Iterable
 COIN = Decimal("1000000")
 SAT = Decimal("0.000001")
 MAX_DECIMALS = 8
+MAX_AMOUNT = Decimal("1000000000000")
 AMOUNT_QUANT = Decimal("0.00000001")
 
 CATEGORY_LABELS = {
@@ -48,9 +50,12 @@ def to_decimal(value: Any, default: Decimal = Decimal("0")) -> Decimal:
         number = Decimal(str(value))
     except (InvalidOperation, ValueError):
         return default.quantize(AMOUNT_QUANT)
-    if not number.is_finite():
+    if not number.is_finite() or abs(number) > MAX_AMOUNT:
         return default.quantize(AMOUNT_QUANT)
-    return number.quantize(AMOUNT_QUANT, rounding=ROUND_HALF_UP)
+    try:
+        return number.quantize(AMOUNT_QUANT, rounding=ROUND_HALF_UP)
+    except InvalidOperation:
+        return default.quantize(AMOUNT_QUANT)
 
 
 def to_sat(value: Any) -> int:
@@ -78,6 +83,8 @@ def format_amount(
     places = max(0, min(MAX_DECIMALS, int(places)))
     quant = Decimal(1).scaleb(-places)
     text = f"{amount.quantize(quant, rounding=ROUND_HALF_UP):,.{places}f}"
+    if not group:
+        text = text.replace(",", "")
     if trim and "." in text:
         whole, fraction = text.split(".", 1)
         fraction = fraction.rstrip("0")
@@ -116,7 +123,7 @@ def parse_amount(text: str) -> Decimal:
         if cleaned.endswith(unit):
             cleaned = cleaned[: -len(unit)].strip()
     if "," in cleaned and "." in cleaned:
-        cleaned = cleaned.replace(",", "")
+        cleaned = _normalise_mixed_separators(cleaned)
     elif "," in cleaned:
         cleaned = cleaned.replace(",", ".")
     if not cleaned or cleaned in (".", ","):
@@ -129,9 +136,40 @@ def parse_amount(text: str) -> Decimal:
         raise ValueError("Сумма должна быть конечным числом")
     if amount < 0:
         raise ValueError("Сумма не может быть отрицательной")
+    if amount > MAX_AMOUNT:
+        raise ValueError("Сумма слишком велика")
     if amount.as_tuple().exponent < -MAX_DECIMALS:
         raise ValueError("too many decimal places")
-    return amount.quantize(AMOUNT_QUANT)
+    try:
+        return amount.quantize(AMOUNT_QUANT)
+    except InvalidOperation as exc:
+        raise ValueError("Сумма указана неверно") from exc
+
+
+def _normalise_mixed_separators(text: str) -> str:
+    """Turn ``1.000,00`` or ``1,000.00`` into a plain dot decimal string.
+
+    When both separators are present, the rightmost one is the decimal
+    separator and the other one must form valid groups of three digits.
+    Ambiguous input such as ``12.34,56`` is rejected instead of silently
+    changing its magnitude.
+    """
+    decimal_sep = "," if text.rfind(",") > text.rfind(".") else "."
+    thousands_sep = "." if decimal_sep == "," else ","
+    integer, separator, fraction = text.rpartition(decimal_sep)
+    if not separator or not integer or not fraction or not fraction.isdigit():
+        raise ValueError("Сумма указана неверно")
+    if any(char not in "0123456789" for char in integer.replace(thousands_sep, "")):
+        raise ValueError("Сумма указана неверно")
+    groups = integer.split(thousands_sep)
+    if (
+        not groups
+        or not groups[0].isdigit()
+        or len(groups[0]) > 3
+        or any(len(group) != 3 or not group.isdigit() for group in groups[1:])
+    ):
+        raise ValueError("Сумма указана неверно")
+    return integer.replace(thousands_sep, "") + "." + fraction
 
 
 def format_int(value: Any) -> str:
@@ -203,13 +241,14 @@ def shorten_address(address: str, head: int = 10, tail: int = 8) -> str:
 
 
 def format_percent(value: Any, digits: int = 1) -> str:
-    """Format a fraction (0..1) or an already scaled percentage."""
+    """Format a fraction as a percentage (1.5 becomes 150.0%)."""
     try:
         number = float(value)
     except (TypeError, ValueError):
         return "0.0%"
-    if number <= 1.0:
-        number *= 100.0
+    if not math.isfinite(number):
+        return "0.0%"
+    number *= 100.0
     return f"{number:.{max(0, digits)}f}%"
 
 

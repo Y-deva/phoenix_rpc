@@ -53,7 +53,9 @@ class QrCode(QWidget):
         return self._text
 
     def save_png(self, path: str, size: int = 512) -> bool:
-        """Render the current matrix to a PNG file."""
+        """Render the current matrix to a PNG file, if it has payload data."""
+        if not self._matrix:
+            return False
         image = QImage(size, size, QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)

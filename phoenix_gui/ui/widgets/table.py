@@ -7,6 +7,7 @@ of rows at most) and item widgets keep the page code compact.
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -97,6 +98,18 @@ class SortHeaderView(QHeaderView):
             ]
         painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
         painter.restore()
+
+
+_NUMERIC_CELL = re.compile(r"^[+-]?\d[\d.,\s]*$")
+
+
+def _csv_safe(value: str) -> str:
+    """Prevent spreadsheet formula execution without mangling numbers."""
+    if not value or value[0] not in "=+-@\t\r":
+        return value
+    if _NUMERIC_CELL.fullmatch(value):
+        return value
+    return "'" + value
 
 
 class SortableTable(QTableWidget):
@@ -256,7 +269,7 @@ class SortableTable(QTableWidget):
     def export_csv(self, path: str | Path) -> int:
         """Write the visible table to a UTF-8 CSV file."""
         target = Path(path)
-        with target.open("w", encoding="utf-8", newline="") as handle:
+        with target.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
             writer.writerow([column.title for column in self._columns])
             count = 0
@@ -264,7 +277,8 @@ class SortableTable(QTableWidget):
                 values = []
                 for column in range(self.columnCount()):
                     item = self.item(row, column)
-                    values.append(item.text() if item is not None else "")
+                    value = item.text() if item is not None else ""
+                    values.append(_csv_safe(value))
                 writer.writerow(values)
                 count += 1
         return count

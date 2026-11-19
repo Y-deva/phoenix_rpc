@@ -1445,6 +1445,7 @@ class MainWindow(QMainWindow):
                 "error": "#FF7070",
                 "warning": "#F2C86B",
                 "info": "#73BEFF",
+                "muted": "#A7B1C2",
             }.items()
         }
 

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
-from .formatting import MAX_DECIMALS, format_nvc, parse_amount, to_decimal
+from .formatting import MAX_AMOUNT, MAX_DECIMALS, format_nvc, parse_amount, to_decimal
 
 BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 BASE58_INDEX = {char: index for index, char in enumerate(BASE58_ALPHABET)}
@@ -86,8 +86,11 @@ def base58_decode(value: str) -> bytes:
         except KeyError as exc:
             raise ValueError(f"invalid Base58 character: {char!r}") from exc
         number = number * 58 + digit
-    length = max(1, (number.bit_length() + 7) // 8)
-    decoded = number.to_bytes(length, "big")
+    if number == 0:
+        decoded = b""
+    else:
+        length = max(1, (number.bit_length() + 7) // 8)
+        decoded = number.to_bytes(length, "big")
     leading = len(value) - len(value.lstrip("1"))
     return b"\x00" * leading + decoded
 
@@ -179,14 +182,21 @@ def validate_amount(
     """Validate an amount typed by the user against balance and dust rules."""
     try:
         amount = value if isinstance(value, Decimal) else parse_amount(str(value))
-    except ValueError as exc:
-        return AmountCheck(False, reason=str(exc))
+    except (ValueError, InvalidOperation) as exc:
+        return AmountCheck(False, reason=str(exc) or "Сумма указана неверно")
+    if not amount.is_finite():
+        return AmountCheck(False, reason="Сумма должна быть конечным числом")
+    if abs(amount) > MAX_AMOUNT:
+        return AmountCheck(False, reason="Сумма слишком велика")
     if require_positive and amount <= 0:
         return AmountCheck(False, reason="Сумма должна быть больше нуля")
     if amount < 0:
         return AmountCheck(False, reason="Сумма не может быть отрицательной")
-    if amount != amount.quantize(Decimal(1).scaleb(-MAX_DECIMALS)):
-        return AmountCheck(False, reason="Слишком много знаков после запятой")
+    try:
+        if amount != amount.quantize(Decimal(1).scaleb(-MAX_DECIMALS)):
+            return AmountCheck(False, reason="Слишком много знаков после запятой")
+    except InvalidOperation:
+        return AmountCheck(False, reason="Сумма указана неверно")
     if dust > 0 and 0 < amount < dust:
         return AmountCheck(
             False, reason=f"Сумма ниже пылевого порога {format_nvc(dust)}"

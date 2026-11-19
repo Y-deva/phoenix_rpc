@@ -99,7 +99,9 @@ class Toast(QFrame):
         layout.addLayout(text_column, 1)
         self.close_button = QPushButton(self)
         self.close_button.setObjectName("IconButton")
-        self.close_button.setIcon(icon("close", "#A7B1C2", 14))
+        self.close_button.setIcon(
+            icon("close", self._colors.get("muted", "#A7B1C2"), 14)
+        )
         self.close_button.setFixedSize(24, 24)
         self.close_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.close_button.setToolTip("Закрыть")
@@ -195,6 +197,9 @@ class ToastManager(QObject):
                     toast._colors[toast._level],
                     18,
                 ).pixmap(18, 18)
+            )
+            toast.close_button.setIcon(
+                icon("close", toast._colors.get("muted", "#A7B1C2"), 14)
             )
 
     def show(
