@@ -178,8 +178,8 @@ class TransactionsPage(BasePage):
             self.received_pill,
             self.sent_pill,
             self.count_pill,
-            self.table.viewport(),
         )
+        self.protect_table(self.table, [2])
 
         QShortcut(QKeySequence("Ctrl+E"), self, activated=self._export_csv)
 
@@ -266,6 +266,7 @@ class TransactionsPage(BasePage):
                 "send": self.tokens.get("accent", "#FF8A3D"),
                 "mine": self.tokens.get("warning", "#F3C969"),
                 "immature": self.tokens.get("warning", "#F3C969"),
+                "orphan": self.tokens.get("negative", "#FF7070"),
             }.get(transaction.kind, self.tokens.get("muted", "#A7B1C2"))
             category_text = self.tr_text(category_label(transaction.category))
             type_item = text_item(
@@ -285,6 +286,8 @@ class TransactionsPage(BasePage):
                     incoming=transaction.amount >= 0,
                     mono_font=mono,
                     signed=True,
+                    positive=self.tokens.get("positive", "#3DD6A0"),
+                    negative=self.tokens.get("negative", "#FF7070"),
                 ),
             )
             confirm_item = SortItem(
@@ -301,8 +304,15 @@ class TransactionsPage(BasePage):
                 "pending": self.tokens.get("warning", "#F3C969"),
                 "immature": self.tokens.get("warning", "#F3C969"),
                 "conflicted": self.tokens.get("negative", "#FF7070"),
+                "orphaned": self.tokens.get("negative", "#FF7070"),
             }.get(transaction.status, self.tokens.get("muted", "#A7B1C2"))
-            status_rank = {"confirmed": 0, "pending": 1, "immature": 2, "conflicted": 3}
+            status_rank = {
+                "confirmed": 0,
+                "pending": 1,
+                "immature": 2,
+                "conflicted": 3,
+                "orphaned": 4,
+            }
             self.table.setItem(
                 row,
                 4,
@@ -436,7 +446,11 @@ class TransactionsPage(BasePage):
         dialog = TxDetailsDialog(
             transaction, dict(self.tokens), self.settings.verbosity, self
         )
-        dialog.exec()
+        host = getattr(self.window(), "show_sheet", None)
+        if callable(host):
+            self.window().show_sheet(dialog)
+        else:
+            dialog.exec()
 
     def _context_menu(self, position: object) -> None:
         """Offer copy and detail actions for the clicked row."""

@@ -1,9 +1,15 @@
 """RPC client, models and service parsing."""
 
 from decimal import Decimal
+from types import SimpleNamespace
 
+import pytest
 
-from phoenix_gui.rpc.client import RPCClient, RPCError
+from phoenix_gui.rpc.client import (
+    RPCClient,
+    RPCError,
+    RPCRateLimitedError,
+)
 from phoenix_gui.rpc.models import Transaction, Utxo
 from phoenix_gui.rpc.service import WalletService, balance_summary
 
@@ -189,3 +195,106 @@ def test_service_pstore_calls():
         ("pload", ["b" * 64, "bin"]),
         ("pcancel", []),
     ]
+
+
+def test_available_addresses_merge_balances_and_imported_activity():
+    client = make_client(
+        {
+            "listaddresses": [
+                {"address": "2NKnown", "account": "Main", "created_at": 10}
+            ],
+            "listunspent": [
+                {
+                    "txid": "a" * 64,
+                    "vout": 0,
+                    "address": "2NKnown",
+                    "amount": 1.25,
+                    "confirmations": 3,
+                },
+                {
+                    "txid": "b" * 64,
+                    "vout": 1,
+                    "address": "2NImported",
+                    "amount": 2.5,
+                    "confirmations": 1,
+                },
+            ],
+            "listtransactions": [
+                {
+                    "txid": "a" * 64,
+                    "category": "receive",
+                    "amount": 1.25,
+                    "address": "2NKnown",
+                    "account": "Main",
+                    "confirmations": 3,
+                    "time": 40,
+                },
+                {
+                    "txid": "c" * 64,
+                    "category": "receive",
+                    "amount": 1,
+                    "address": "2NKnown",
+                    "account": "Main",
+                    "confirmations": 2,
+                    "time": 30,
+                },
+            ],
+        }
+    )
+    addresses = WalletService(client).available_addresses()
+    known = next(item for item in addresses if item.address == "2NKnown")
+    imported = next(item for item in addresses if item.address == "2NImported")
+    assert known.account == "Main"
+    assert known.balance == Decimal("1.25000000")
+    assert known.utxo_count == 1
+    assert known.tx_count == 2
+    assert known.created_at == 10
+    assert imported.balance == Decimal("2.50000000")
+    assert imported.utxo_count == 1
+    assert imported.tx_count == 0
+
+
+def test_node_snapshot_collects_mining_and_connections():
+    client = make_client(
+        {
+            "getinfo": {"blocks": 500, "connections": 7, "difficulty": 2.5},
+            "getmininginfo": {"networkhashps": 1500000000, "generate": True},
+            "getconnectioncount": 7,
+        }
+    )
+    snapshot = WalletService(client).node_snapshot()
+    assert snapshot == {
+        "blocks": 500,
+        "connections": 7,
+        "difficulty": Decimal("2.5"),
+        "hashrate": 1500000000,
+        "mining": True,
+        "errors": "",
+        "peers": 7,
+    }
+
+
+def test_rate_limit_uses_retry_after_and_blocks_immediate_retry(monkeypatch):
+    """A 429 must establish a cooldown without resetting on the next call."""
+    client = RPCClient("http://127.0.0.1:1", "user", "pass")
+    response = SimpleNamespace(
+        status_code=429,
+        headers={"Retry-After": "7"},
+        reason="Too Many Requests",
+        text="{}",
+        json=lambda: {},
+    )
+    attempts = []
+    monkeypatch.setattr(
+        client,
+        "_session",
+        lambda: SimpleNamespace(
+            post=lambda *args, **kwargs: attempts.append(1) or response
+        ),
+    )
+    with pytest.raises(RPCRateLimitedError) as first:
+        client.call("getinfo")
+    assert first.value.retry_after == 7
+    with pytest.raises(RPCRateLimitedError):
+        client.call("getinfo")
+    assert len(attempts) == 1

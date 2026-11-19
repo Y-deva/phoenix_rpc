@@ -11,20 +11,34 @@ def humanize_error(error: BaseException | Any) -> str:
         RPCAuthError,
         RPCConnectionError,
         RPCProtocolError,
+        RPCRateLimitedError,
         RPCError,
     )
 
     if isinstance(error, RPCConnectionError):
-        return (
-            "Нет связи с прокси. Проверьте, что main.py запущен, "
-            "а адрес и порт в настройках совпадают."
-        )
+        return "Локальный прокси не отвечает. Запустите его или откройте журнал."
     if isinstance(error, RPCAuthError):
         return "Прокси отклонил логин или пароль. Проверьте настройки подключения."
+    if isinstance(error, RPCRateLimitedError):
+        return (
+            "Узел временно ограничил частоту запросов. "
+            "Повторите операцию через несколько секунд."
+        )
     if isinstance(error, RPCProtocolError):
         return "Прокси вернул неожиданный ответ. Повторите запрос или проверьте журнал."
     if isinstance(error, RPCError):
         message = str(error.message or error)
+        lowered = message.casefold()
+        if "no suitable utxo" in lowered or "no suitable utxo to split" in lowered:
+            return (
+                "Для загрузки нужен подтвержденный вход и якорь pstore. "
+                "Дождитесь синхронизации и пополните кошелек."
+            )
+        if "did not respond" in lowered or "read timed out" in lowered:
+            return (
+                "Узел не ответил вовремя: вероятно, идет синхронизация. "
+                "Повторите операцию позже."
+            )
         return message[:400]
     if isinstance(error, TimeoutError):
         return (

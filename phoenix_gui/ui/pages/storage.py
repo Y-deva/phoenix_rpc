@@ -12,12 +12,12 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QStackedWidget,
     QWidget,
 )
 
+from ...core.errors import humanize_error
 from ...core.formatting import format_bytes
 from ...core.tasks import run_async
 from ..widgets.card import Card
@@ -78,6 +78,18 @@ class StoragePage(ScrollPage):
         title = QLabel("Загрузить файл")
         title.setObjectName("CardTitle")
         card.add(title)
+
+        funds_hint = QLabel(
+            "Для первой загрузки нужны два подтвержденных входа: один "
+            "дробится под pstore, второй остается для coinstake."
+        )
+        funds_hint.setObjectName("HintText")
+        funds_hint.setWordWrap(True)
+        funds_hint.setToolTip(
+            "pstore создает якорь на 1 сатоши; один UTXO уходит в split, "
+            "второй нужен майнеру"
+        )
+        card.add(funds_hint)
 
         self.source_control = SegmentedControl()
         self.source_control.add_segment(
@@ -213,6 +225,11 @@ class StoragePage(ScrollPage):
         self.cancel_button.setToolTip("Удалить неподтвержденные pstore-транзакции")
         self.cancel_button.clicked.connect(self._cancel_pending)
         card.add(self.cancel_button, 0)
+        self.cancel_status = QLabel("")
+        self.cancel_status.setObjectName("HintText")
+        self.cancel_status.setWordWrap(True)
+        self.cancel_status.setVisible(False)
+        card.add(self.cancel_status)
         return card
 
     def apply_theme(self) -> None:
@@ -314,11 +331,12 @@ class StoragePage(ScrollPage):
 
     def _upload_failed(self, error: object) -> None:
         """Report an upload error without hiding the form."""
-        self.upload_status.setText(f"Ошибка: {error}")
+        message = humanize_error(error)
+        self.upload_status.setText(f"Ошибка: {message}")
         self.upload_status.setProperty("error", True)
         self._refresh_style(self.upload_status)
         self.upload_progress.finish("Ошибка")
-        self.errorRaised.emit(str(error))
+        self.errorRaised.emit(message)
 
     def _upload_finished(self) -> None:
         """Release upload controls."""
@@ -381,12 +399,13 @@ class StoragePage(ScrollPage):
         self.notify("Файл получен из pstore", 4000)
 
     def _download_failed(self, error: object) -> None:
-        """Report a download error."""
-        self.download_status.setText(f"Ошибка: {error}")
+        """Report a download error with the same wording as upload errors."""
+        message = humanize_error(error)
+        self.download_status.setText(f"Ошибка: {message}")
         self.download_status.setProperty("error", True)
         self._refresh_style(self.download_status)
         self.download_progress.finish("Ошибка")
-        self.errorRaised.emit(str(error))
+        self.errorRaised.emit(message)
 
     def _download_finished(self) -> None:
         """Release download controls."""
@@ -405,16 +424,17 @@ class StoragePage(ScrollPage):
         """Confirm and call pcancel."""
         if self._busy_cancel:
             return
-        answer = QMessageBox.question(
-            self,
+        self.ask(
             "Отменить pstore",
             "Удалить все неподтвержденные pstore-транзакции из очереди? "
             "Уже подтвержденные транзакции останутся в блокчейне.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self._do_cancel_pending,
+            "Отменить",
+            True,
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+
+    def _do_cancel_pending(self) -> None:
+        """Send pcancel after the embedded confirmation."""
         self._busy_cancel = True
         self.cancel_button.setEnabled(False)
         self.busyChanged.emit(True)
@@ -429,11 +449,17 @@ class StoragePage(ScrollPage):
         """Report how many queued transactions were removed."""
         data = result if isinstance(result, dict) else {}
         count = int(data.get("cancelled", 0) or 0)
+        self.cancel_status.setVisible(False)
         self.notify(f"Отменено транзакций: {count}", 4000)
 
     def _cancel_failed(self, error: object) -> None:
-        """Report a cancellation error."""
-        self.errorRaised.emit(str(error))
+        """Report a cancellation error without leaking a raw traceback."""
+        message = humanize_error(error)
+        self.cancel_status.setText(f"Ошибка: {message}")
+        self.cancel_status.setVisible(True)
+        self.cancel_status.setProperty("error", True)
+        self._refresh_style(self.cancel_status)
+        self.errorRaised.emit(message)
 
     def _cancel_finished(self) -> None:
         """Release the cancel button."""

@@ -53,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="theme used for this capture",
     )
     parser.add_argument(
+        "--privacy",
+        action="store_true",
+        help="capture with privacy plaques enabled",
+    )
+    parser.add_argument(
         "--suffix",
         default="",
         help="file name suffix, for example -light",
@@ -86,6 +91,8 @@ def run() -> int:
         settings = Settings(Path(temporary) / "settings.ini")
         settings.set("behavior/refresh_seconds", 600)
         settings.set("appearance/language", args.language)
+        if args.privacy:
+            settings.set("privacy/hidden", True)
         themes = ThemeManager(settings, app)
         themes.apply(args.theme)
         window = MainWindow(project, settings, DemoService(), themes, demo=True)

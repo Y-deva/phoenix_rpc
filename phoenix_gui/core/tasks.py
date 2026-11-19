@@ -32,11 +32,27 @@ class Task(QRunnable):
         try:
             result = self.function(*self.args, **self.kwargs)
         except Exception as exc:  # noqa: BLE001 - background boundary
-            self.signals.failed.emit(exc)
+            self._emit("failed", exc)
         else:
-            self.signals.finished.emit(result)
+            self._emit("finished", result)
         finally:
-            self.signals.done.emit()
+            self._emit("done")
+
+    def _emit(self, name: str, value: object = None) -> None:
+        """Emit a signal if the owning window still exists.
+
+        Background work can finish after the window is closed.  In that case
+        Qt has already deleted the signal proxy and accessing it would raise
+        a RuntimeError inside the pool thread and abort the process.
+        """
+        try:
+            signal = getattr(self.signals, name)
+            if name == "done":
+                signal.emit()
+            else:
+                signal.emit(value)
+        except RuntimeError:
+            return
 
 
 _ACTIVE: set[Task] = set()

@@ -189,5 +189,12 @@ def parse_connection(text: str) -> tuple[str, str, str]:
     user = parsed.username or ""
     password = parsed.password or ""
     host = parsed.hostname or DEFAULT_PROXY_HOST
-    port = parsed.port or DEFAULT_PROXY_PORT
-    return f"{parsed.scheme or 'http'}://{host}:{port}", user, password
+    try:
+        port = parsed.port or DEFAULT_PROXY_PORT
+    except ValueError as exc:
+        raise ValueError("Некорректный порт в адресе подключения") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("Порт должен быть в диапазоне 1-65535")
+    # An IPv6 literal must keep its brackets inside a URL.
+    host_part = f"[{host}]" if ":" in host else host
+    return f"{parsed.scheme or 'http'}://{host_part}:{port}", user, password

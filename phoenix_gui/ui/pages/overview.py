@@ -94,15 +94,10 @@ class OverviewPage(ScrollPage):
         self.protect(
             self.balance_label,
             self.hero_caption,
-            self.hero_spark,
             self.pending_card.value_label,
-            self.pending_card.caption_label,
             self.immature_card.value_label,
-            self.immature_card.caption_label,
             self.addresses_card.value_label,
-            self.addresses_card.caption_label,
             self.utxo_card.value_label,
-            self.utxo_card.caption_label,
             self.activity_chart.canvas,
             self.distribution_chart.canvas,
         )

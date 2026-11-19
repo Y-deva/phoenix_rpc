@@ -1,4 +1,5 @@
 import os
+
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
 import signal
@@ -11,6 +12,7 @@ import requests
 
 if not os.path.isfile("config.toml"):
     import conf_gen
+
     if not conf_gen.generate_config():
         print("[MAIN] config.toml missing and could not be generated. Exiting.")
         sys.exit(1)
@@ -19,12 +21,14 @@ from db import init_db, checkpoint_wal
 import keychain
 from newaddress import generate_address, list_addresses
 from pstore import (
-    handle_pstore, set_keys as pstore_set_keys,
-    handle_pload, handle_pcancel,
+    handle_pstore,
+    set_keys as pstore_set_keys,
+    handle_pload,
+    handle_pcancel,
 )
 from group_tx import handle_listunspent, handle_getbalance, handle_listtransactions
 from unlock import handle_sendtoaddress, handle_signrawtransaction, set_keypair
-from utxo_parser import run_parser_loop
+from utxo_parser import run_parser_loop, pause_parser, resume_parser
 from pow_work import handle_getwork_request, handle_getwork_submit
 from pos_miner import set_falcon_keys as pos_set_falcon, run_pos_miner
 import hashlib
@@ -63,7 +67,9 @@ def check_auth(username, password):
 
 
 def authenticate():
-    return Response('Unauthorized', 401, {'WWW-Authenticate': 'Basic realm="RPC Proxy"'})
+    return Response(
+        "Unauthorized", 401, {"WWW-Authenticate": 'Basic realm="RPC Proxy"'}
+    )
 
 
 def requires_auth(f):
@@ -73,24 +79,31 @@ def requires_auth(f):
         if not auth or not check_auth(auth.username, auth.password):
             return authenticate()
         return f(*args, **kwargs)
+
     return decorated
 
 
-@app.route('/', methods=['POST'])
+@app.route("/health", methods=["GET"])
+def health():
+    """Return a lightweight liveness answer without touching the daemon."""
+    return {"ok": True, "service": "phoenix-proxy"}
+
+
+@app.route("/", methods=["POST"])
 @requires_auth
 def rpc_proxy():
     data = request.get_json()
     if not data:
         return jsonify({"error": "Invalid JSON"}), 400
 
-    method = data.get('method')
-    params = data.get('params', [])
-    req_id = data.get('id')
+    method = data.get("method")
+    params = data.get("params", [])
+    req_id = data.get("id")
 
     rpc_config = {"url": DEMON_URL, "user": DEMON_USER, "password": DEMON_PASS}
 
     try:
-        if method == 'getnewaddress':
+        if method == "getnewaddress":
             account = params[0] if params and len(params) > 0 else ""
             print(f"[PROXY] getnewaddress(account='{account}')")
             info = generate_address(pubkey_hash, account)
@@ -98,117 +111,157 @@ def rpc_proxy():
                 f.write("1")
             return jsonify({"result": info["address"], "error": None, "id": req_id})
 
-        if method == 'listaddresses':
+        if method == "listaddresses":
             return jsonify({"result": list_addresses(), "error": None, "id": req_id})
 
-        if method == 'pstore':
+        if method == "pstore":
             if not params:
-                return jsonify({
-                    "result": None,
-                    "error": {"code": -1, "message": "file path or URL required"},
-                    "id": req_id,
-                }), 400
+                return jsonify(
+                    {
+                        "result": None,
+                        "error": {"code": -1, "message": "file path or URL required"},
+                        "id": req_id,
+                    }
+                ), 400
+            pause_parser()
             try:
                 result = handle_pstore(params, rpc_config)
                 return jsonify({"result": result, "error": None, "id": req_id})
             except Exception as e:
                 print(f"[PROXY] pstore error: {e}")
-                return jsonify({
-                    "result": None,
-                    "error": {"code": -1, "message": str(e)},
-                    "id": req_id,
-                }), 400
-                
-        if method == 'pload':
+                return jsonify(
+                    {
+                        "result": None,
+                        "error": {"code": -1, "message": str(e)},
+                        "id": req_id,
+                    }
+                ), 400
+            finally:
+                resume_parser()
+
+        if method == "pload":
             if not params:
-                return jsonify({
-                    "result": None,
-                    "error": {"code": -1, "message": "file_id required"},
-                    "id": req_id,
-                }), 400
+                return jsonify(
+                    {
+                        "result": None,
+                        "error": {"code": -1, "message": "file_id required"},
+                        "id": req_id,
+                    }
+                ), 400
             try:
                 # params: [file_id, ext?]
                 result = handle_pload(params, rpc_config)
                 return jsonify({"result": result, "error": None, "id": req_id})
             except Exception as e:
                 print(f"[PROXY] pload error: {e}")
-                return jsonify({
-                    "result": None,
-                    "error": {"code": -1, "message": str(e)},
-                    "id": req_id,
-                }), 400
-            
-        if method == 'pcancel':
+                return jsonify(
+                    {
+                        "result": None,
+                        "error": {"code": -1, "message": str(e)},
+                        "id": req_id,
+                    }
+                ), 400
+
+        if method == "pcancel":
             try:
                 result = handle_pcancel(params, rpc_config)
                 return jsonify({"result": result, "error": None, "id": req_id})
             except Exception as e:
                 print(f"[PROXY] pcancel error: {e}")
-                return jsonify({
-                    "result": None,
-                    "error": {"code": -1, "message": str(e)},
+                return jsonify(
+                    {
+                        "result": None,
+                        "error": {"code": -1, "message": str(e)},
+                        "id": req_id,
+                    }
+                ), 400
+
+        if method == "listunspent":
+            return jsonify(
+                {
+                    "result": handle_listunspent(params, rpc_config),
+                    "error": None,
                     "id": req_id,
-                }), 400
+                }
+            )
 
-        if method == 'listunspent':
-            return jsonify({
-                "result": handle_listunspent(params, rpc_config),
-                "error": None, "id": req_id,
-            })
+        if method == "getbalance":
+            return jsonify(
+                {
+                    "result": handle_getbalance(params, rpc_config),
+                    "error": None,
+                    "id": req_id,
+                }
+            )
 
-        if method == 'getbalance':
-            return jsonify({
-                "result": handle_getbalance(params, rpc_config),
-                "error": None, "id": req_id,
-            })
+        if method == "listtransactions":
+            return jsonify(
+                {
+                    "result": handle_listtransactions(params, rpc_config),
+                    "error": None,
+                    "id": req_id,
+                }
+            )
 
-        if method == 'listtransactions':
-            return jsonify({
-                "result": handle_listtransactions(params, rpc_config),
-                "error": None, "id": req_id,
-            })
+        if method == "signrawtransaction":
+            return jsonify(
+                {
+                    "result": handle_signrawtransaction(params, rpc_config),
+                    "error": None,
+                    "id": req_id,
+                }
+            )
 
-        if method == 'signrawtransaction':
-            return jsonify({
-                "result": handle_signrawtransaction(params, rpc_config),
-                "error": None, "id": req_id,
-            })
-
-        if method == 'sendtoaddress':
-            txid = handle_sendtoaddress(params, rpc_config, broadcast=True)
+        if method == "sendtoaddress":
+            pause_parser()
+            try:
+                txid = handle_sendtoaddress(params, rpc_config, broadcast=True)
+            finally:
+                resume_parser()
             return jsonify({"result": txid, "error": None, "id": req_id})
 
-        if method == 'getwork':
+        if method == "getwork":
             if not params:
                 result = handle_getwork_request(rpc_config, pubkey_hash)
             else:
                 result = handle_getwork_submit(params[0], rpc_config)
             return jsonify({"result": result, "error": None, "id": req_id})
 
-        resp = requests.post(
-            DEMON_URL,
-            headers={"Content-Type": "application/json"},
-            auth=(DEMON_USER, DEMON_PASS),
-            json=data,
-            timeout=30,
+        # Interactive RPC has priority over the background chain scanner.
+        pause_parser()
+        try:
+            resp = requests.post(
+                DEMON_URL,
+                headers={"Content-Type": "application/json"},
+                auth=(DEMON_USER, DEMON_PASS),
+                json=data,
+                timeout=30,
+            )
+        finally:
+            resume_parser()
+        return Response(
+            resp.text, status=resp.status_code, content_type="application/json"
         )
-        return Response(resp.text, status=resp.status_code, content_type='application/json')
 
     except requests.exceptions.RequestException as e:
         print(f"[PROXY] {method} forward failed: {e}")
-        return jsonify({
-            "result": None,
-            "error": {"code": -1, "message": f"daemon unreachable: {e}"},
-            "id": req_id,
-        }), 502
+        return jsonify(
+            {
+                "result": None,
+                "error": {"code": -1, "message": f"daemon unreachable: {e}"},
+                "id": req_id,
+            }
+        ), 502
 
     except Exception as e:
         print(f"[PROXY] {method} error: {e}")
-        return jsonify({
-            "result": None,
-            "error": {"code": -1, "message": str(e)},
-            "id": req_id,
-        })
+        return jsonify(
+            {
+                "result": None,
+                "error": {"code": -1, "message": str(e)},
+                "id": req_id,
+            }
+        )
 
 
 def graceful_shutdown(signum, frame):
@@ -223,20 +276,25 @@ def graceful_shutdown(signum, frame):
 signal.signal(signal.SIGINT, graceful_shutdown)
 signal.signal(signal.SIGTERM, graceful_shutdown)
 
+
 def _parse_args():
     p = argparse.ArgumentParser(prog="main.py")
-    p.add_argument("--recover", action="store_true",
-                   help="Start address recovery in background")
-    p.add_argument("--recover-from", type=int, default=1_100_000,
-                   help="Recover from height (1100000 by default)")
-    p.add_argument("--recover-batch", type=int, default=20,
-                   help="Address batch size")
+    p.add_argument(
+        "--recover", action="store_true", help="Start address recovery in background"
+    )
+    p.add_argument(
+        "--recover-from",
+        type=int,
+        default=1_100_000,
+        help="Recover from height (1100000 by default)",
+    )
+    p.add_argument("--recover-batch", type=int, default=20, help="Address batch size")
     return p.parse_args()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     args = _parse_args()
-    
+
     init_db()
     checkpoint_wal()
 
@@ -247,7 +305,7 @@ if __name__ == '__main__':
         daemon=True,
     )
     parser_thread.start()
-    
+
     if args.recover:
         from recover import recover as run_recover
 

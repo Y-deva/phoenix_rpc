@@ -40,8 +40,10 @@ class ConfirmSendDialog(QDialog):
         self.setModal(True)
         self.setMinimumWidth(500)
         self._build(address, amount, fee, change, comment, input_count, expert)
-        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self.accept)
-        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self.accept)
+        for sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self.accept)
 
     def _build(
         self,

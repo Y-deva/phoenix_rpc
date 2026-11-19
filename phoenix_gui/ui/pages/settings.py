@@ -17,10 +17,10 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -35,7 +35,7 @@ from ...ui.widgets.fields import (
     PathField,
     SegmentedControl,
 )
-from ...ui.widgets.icons import brand_logo, icon
+from ...ui.widgets.icons import icon
 from ...ui.widgets.progress import Spinner
 from ...ui.widgets.theme import (
     CUSTOM_TOKENS,
@@ -47,6 +47,12 @@ from ...ui.widgets.theme import (
 )
 from .base import ScrollPage
 
+REPOSITORY_URL = "https://github.com/Y-deva/phoenix_rpc"
+DEVELOPERS = (
+    ("FurryDrag0n", "https://github.com/FurryDrag0n"),
+    ("Y-deva", "https://github.com/Y-deva"),
+)
+
 VERBOSITY_HINTS = {
     0: "Только главное: суммы, статусы и основные действия.",
     1: "Баланс, подтверждения и подсказки по умолчанию.",
@@ -57,6 +63,8 @@ VERBOSITY_HINTS = {
 class SettingsPage(ScrollPage):
     """Configure appearance, background media, daemon and connection."""
 
+    migrationRequested = pyqtSignal()
+
     page_id = "settings"
     page_title = "Настройки"
     page_subtitle = "Внешний вид, безопасность и параметры подключения"
@@ -64,6 +72,10 @@ class SettingsPage(ScrollPage):
 
     connectionChanged = pyqtSignal()
     daemonRestartRequested = pyqtSignal()
+    proxyStartRequested = pyqtSignal()
+    proxyStopRequested = pyqtSignal()
+    proxyRestartRequested = pyqtSignal()
+    diagnosticsRequested = pyqtSignal()
 
     def __init__(self, context: Any, parent: QWidget | None = None) -> None:
         """Initialize the SettingsPage instance."""
@@ -88,6 +100,8 @@ class SettingsPage(ScrollPage):
         self._build_sound()
         self._build_connection()
         self._build_daemon()
+        self._build_migration()
+        self._build_developers()
         self._build_about()
         self.add_stretch()
 
@@ -516,6 +530,7 @@ class SettingsPage(ScrollPage):
         self.user_edit.editingFinished.connect(self._save_connection)
         form.addRow("Пользователь", self.user_edit)
         self.password_edit = PasswordField()
+        self.password_edit.setToolTip("Пароль для подключения к локальному прокси")
         self.password_edit.setPlaceholderText("Пароль прокси")
         self.password_edit.editingFinished.connect(self._save_connection)
         form.addRow("Пароль", self.password_edit)
@@ -541,6 +556,50 @@ class SettingsPage(ScrollPage):
         test_row.addWidget(self.test_spinner)
         test_row.addWidget(self.test_button)
         form.addRow("Проверка", test_row)
+
+        self.proxy_status = QLabel("Прокси не запущен")
+        self.proxy_status.setObjectName("Muted")
+        form.addRow("Прокси", self.proxy_status)
+        self.proxy_autostart_box = QCheckBox("Запускать прокси при старте GUI")
+        self.proxy_autostart_box.setToolTip(
+            "Пароль хранилища ключей будет запрошен в окне кошелька"
+        )
+        self.proxy_autostart_box.toggled.connect(
+            lambda checked: self.settings.set("proxy/autostart", checked)
+        )
+        form.addRow("Автозапуск", self.proxy_autostart_box)
+        proxy_row = QHBoxLayout()
+        self.proxy_start_button = QPushButton("Запустить")
+        self.proxy_start_button.setObjectName("GhostButton")
+        self.proxy_start_button.setToolTip("Запустить локальный прокси без терминала")
+        self.proxy_start_button.clicked.connect(self.proxyStartRequested.emit)
+        self.proxy_stop_button = QPushButton("Остановить")
+        self.proxy_stop_button.setObjectName("GhostButton")
+        self.proxy_stop_button.setToolTip("Остановить прокси, запущенный этим окном")
+        self.proxy_stop_button.clicked.connect(self.proxyStopRequested.emit)
+        self.proxy_restart_button = QPushButton("Перезапустить")
+        self.proxy_restart_button.setObjectName("GhostButton")
+        self.proxy_restart_button.setToolTip("Перезапустить локальный прокси")
+        self.proxy_restart_button.clicked.connect(self.proxyRestartRequested.emit)
+        self.diagnostics_button = QPushButton("Серверы")
+        self.diagnostics_button.setObjectName("GhostButton")
+        self.diagnostics_button.setToolTip(
+            "Открыть 상태 серверов, журнал и команды запуска"
+        )
+        self.diagnostics_button.clicked.connect(self.diagnosticsRequested.emit)
+        proxy_row.addStretch(1)
+        proxy_row.addWidget(self.diagnostics_button)
+        proxy_row.addWidget(self.proxy_start_button)
+        proxy_row.addWidget(self.proxy_stop_button)
+        proxy_row.addWidget(self.proxy_restart_button)
+        form.addRow("", proxy_row)
+        proxy_hint = QLabel(
+            "Пароль хранилища ключей вводится в диалоге Phoenix. "
+            "Консоль и отдельный терминал не нужны."
+        )
+        proxy_hint.setObjectName("HintText")
+        proxy_hint.setWordWrap(True)
+        form.addRow("", proxy_hint)
 
     def _build_daemon(self) -> None:
         """Autostart, binary location and daemon arguments."""
@@ -601,12 +660,126 @@ class SettingsPage(ScrollPage):
         daemon_row.addWidget(self.restart_daemon_button)
         form.addRow("", daemon_row)
         hint = QLabel(
-            "Прокси запускается отдельно: он запрашивает пароль хранилища ключей "
-            "в терминале."
+            "Прокси запускается из окна кошелька; пароль хранилища ключей "
+            "запрашивается один раз в диалоге."
         )
         hint.setObjectName("HintText")
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+    def set_proxy_controls(self, state: str, owned: bool = False) -> None:
+        """Enable only proxy actions that make sense in the current state."""
+        self.proxy_start_button.setEnabled(state in {"stopped", "missing", "failed"})
+        self.proxy_stop_button.setEnabled(state == "running" and owned)
+        self.proxy_restart_button.setEnabled(state in {"running", "failed", "missing"})
+        if state == "running" and not owned:
+            self.proxy_stop_button.setToolTip(
+                "Прокси запущен вне этого окна; остановить его можно вручную"
+            )
+        else:
+            self.proxy_stop_button.setToolTip(
+                "Остановить прокси, запущенный этим окном"
+            )
+
+    def set_proxy_status(self, text: str, color: str | None = None) -> None:
+        """Show the local proxy lifecycle on the settings page."""
+        self.proxy_status.setText(text)
+        if color:
+            self.proxy_status.setStyleSheet(f"color: {color};")
+        else:
+            self.proxy_status.setStyleSheet("")
+
+    def _build_migration(self) -> None:
+        """Offer a guided transfer of an old wallet without console commands."""
+        card = Card()
+        card.add(
+            SectionHeader(
+                "Перенос старого кошелька",
+                "Помощник импортирует ключи из wallet.dat или WIF "
+                "в локальный резервный кошелек и отправит средства на адрес Phoenix.",
+            )
+        )
+        body = QLabel(
+            "Старый формат ключей несовместим с Falcon-ключами Phoenix, "
+            "поэтому средства переводятся на новый адрес. Оригинальный "
+            "wallet.dat не изменяется. Мастер работает через локальный "
+            "novacoind и не запрашивает пароль в терминале."
+        )
+        body.setObjectName("HintText")
+        body.setWordWrap(True)
+        card.add(body)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 4, 0, 0)
+        row.setSpacing(12)
+        note = QLabel(
+            "Сделайте резервную копию keypair.bin и wallet.dat перед переносом."
+        )
+        note.setObjectName("Faint")
+        note.setWordWrap(True)
+        row.addWidget(note, 1)
+        self.migration_button = QPushButton("Открыть мастер переноса")
+        self.migration_button.setObjectName("AccentButton")
+        self.migration_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.migration_button.setToolTip(
+            "Импорт WIF или wallet.dat с автоматическим переводом средств"
+        )
+        self.migration_button.clicked.connect(self.migrationRequested.emit)
+        row.addWidget(self.migration_button)
+        card.add_layout(row)
+        self.body.addWidget(card)
+
+    def _build_developers(self) -> None:
+        """Repository and developer contact links."""
+        card, form = self._section("Разработчики", "Исходный код и контакты команды")
+        self.developer_buttons: list[QPushButton] = []
+        links = (("Репозиторий", "Y-deva/phoenix_rpc", REPOSITORY_URL),) + tuple(
+            ("Разработчик", name, url) for name, url in DEVELOPERS
+        )
+        for role, title_text, url in links:
+            row = QWidget()
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(10)
+            glyph = QLabel()
+            glyph.setPixmap(
+                icon("link", self.tokens.get("accent", "#FF8A3D"), 16).pixmap(16, 16)
+            )
+            glyph.setFixedSize(18, 18)
+            row_layout.addWidget(glyph)
+            text_column = QVBoxLayout()
+            text_column.setSpacing(1)
+            title = QLabel(title_text)
+            title.setObjectName("MonoStrong")
+            address = QLabel(url.removeprefix("https://"))
+            address.setObjectName("Muted")
+            address.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextSelectableByMouse
+            )
+            text_column.addWidget(title)
+            text_column.addWidget(address)
+            row_layout.addLayout(text_column, 1)
+            open_button = QPushButton("Открыть")
+            open_button.setObjectName("GhostButton")
+            open_button.setIcon(icon("link", self.tokens.get("accent", "#FF8A3D"), 15))
+            open_button.setToolTip(url)
+            open_button.setProperty("url", url)
+            open_button.clicked.connect(
+                lambda _checked=False, target=url: self._open_external(target)
+            )
+            row_layout.addWidget(open_button)
+            self.developer_buttons.append(open_button)
+            form.addRow(role, row)
+        hint = QLabel("Ссылки открываются в системном браузере.")
+        hint.setObjectName("HintText")
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+
+    def _open_external(self, url: str) -> None:
+        """Open a developer link in the default browser."""
+        if QDesktopServices.openUrl(QUrl(url)):
+            self.statusMessage.emit(self.tr_text("Ссылка открыта в браузере"), 2500)
+        else:
+            self.statusMessage.emit(self.tr_text("Не удалось открыть ссылку"), 4000)
 
     def _build_about(self) -> None:
         """Project paths, about dialog and reset."""
@@ -694,6 +867,7 @@ class SettingsPage(ScrollPage):
             self.timeout_spin.setValue(self.settings.timeout_seconds)
 
             self.autostart_box.setChecked(self.settings.daemon_autostart)
+            self.proxy_autostart_box.setChecked(self.settings.proxy_autostart)
             self.binary_field.set_path(self.settings.daemon_binary)
             self.datadir_field.set_path(self.settings.daemon_datadir)
             self.args_edit.setText(self.settings.daemon_extra_args)
@@ -947,9 +1121,21 @@ class SettingsPage(ScrollPage):
         """Persist proxy credentials and notify the shell."""
         if self._syncing:
             return
-        self.settings.set("connection/proxy_url", self.proxy_edit.text().strip())
-        self.settings.set("connection/proxy_user", self.user_edit.text().strip())
-        self.settings.set("connection/proxy_password", self.password_edit.text())
+        values = (
+            self.proxy_edit.text().strip(),
+            self.user_edit.text().strip(),
+            self.password_edit.text(),
+        )
+        previous = (
+            str(self.settings.get("connection/proxy_url") or ""),
+            str(self.settings.get("connection/proxy_user") or ""),
+            str(self.settings.get("connection/proxy_password") or ""),
+        )
+        if values == previous:
+            return
+        self.settings.set("connection/proxy_url", values[0])
+        self.settings.set("connection/proxy_user", values[1])
+        self.settings.set("connection/proxy_password", values[2])
         self.connectionChanged.emit()
 
     def _test_connection(self) -> None:
@@ -1021,34 +1207,26 @@ class SettingsPage(ScrollPage):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.config.root)))
 
     def _show_about(self) -> None:
-        """Display a short about dialog."""
-        from ... import __app_name__, __version__
-
-        box = QMessageBox(self)
-        box.setWindowTitle("О программе")
-        box.setText(
-            f"{__app_name__} {__version__}\n\n"
-            "Графический интерфейс кошелька Phoenix на базе NovaCoin.\n"
-            "Демон novacoind запускается под капотом, "
-            "обмен идет через локальный прокси."
-        )
-        logo = brand_logo(72)
-        if not logo.isNull():
-            box.setIconPixmap(logo)
-        box.exec()
+        """Show product information in the shared sheet host."""
+        host = getattr(self.window(), "show_about", None)
+        if callable(host):
+            host()
+            return
+        self.notify("Phoenix Wallet - графический кошелек NovaCoin", 4000)
 
     def _reset_settings(self) -> None:
-        """Restore defaults after an explicit confirmation."""
-        answer = QMessageBox.question(
-            self,
+        """Restore defaults after an in-window confirmation."""
+        self.ask(
             "Сброс настроек",
-            "Вернуть все предпочтения к значениям по умолчанию?\n"
+            "Вернуть все предпочтения к значениям по умолчанию? "
             "Данные кошелька и история операций не затрагиваются.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            self._do_reset_settings,
+            "Сбросить",
+            True,
         )
-        if answer != QMessageBox.StandardButton.Yes:
-            return
+
+    def _do_reset_settings(self) -> None:
+        """Apply the reset after confirmation."""
         self.settings.reset_defaults()
         self.settings.bootstrap(self.config, force=True)
         self._sync_from_settings()

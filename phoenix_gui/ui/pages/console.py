@@ -9,7 +9,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -168,15 +167,20 @@ class ConsolePage(BasePage):
             )
             return
         method = find_method(command.method)
-        if (
-            method is not None
-            and method.danger
-            and not self._confirm_danger(method.signature)
-        ):
-            self.output.append_line(
-                "Выполнение отменено.", self.tokens.get("warning", "#F3C969")
+        if method is not None and method.danger:
+            self.ask(
+                "Опасная команда",
+                f"Выполнить {method.signature}? Команда может изменить "
+                "кошелек или остановить демон.",
+                lambda: self._run_command(command, line),
+                "Выполнить",
+                True,
             )
             return
+        self._run_command(command, line)
+
+    def _run_command(self, command, line: str) -> None:
+        """Run a parsed command after any confirmation."""
         self._remember(line)
         self.input.clear()
         self.output.append_line(
@@ -228,19 +232,6 @@ class ConsolePage(BasePage):
         self.spinner.stop()
         self.run_button.setEnabled(True)
         self.input.setFocus()
-
-    def _confirm_danger(self, signature: str) -> bool:
-        """Ask before executing a potentially destructive RPC method."""
-        box = QMessageBox(self)
-        box.setWindowTitle("Подтверждение")
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setText(f"Выполнить опасную команду?\n\n{signature}")
-        box.setInformativeText("Команда может изменить кошелек или остановить демон.")
-        run = box.addButton("Выполнить", QMessageBox.ButtonRole.AcceptRole)
-        cancel = box.addButton("Отмена", QMessageBox.ButtonRole.RejectRole)
-        box.setDefaultButton(cancel)
-        box.exec()
-        return box.clickedButton() is run
 
     def _insert_method(self, name: str) -> None:
         """Insert a method from the browser into the input."""

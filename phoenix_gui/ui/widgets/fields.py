@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from PyQt6.QtCore import QRegularExpression, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QGuiApplication, QRegularExpressionValidator
+from PyQt6.QtGui import QGuiApplication, QPalette, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
@@ -49,7 +49,7 @@ class SearchField(QLineEdit):
         self.setMinimumWidth(180)
         self.setToolTip("Поиск по содержимому таблицы или списка")
         QTimer.singleShot(0, self._prepare_clear_button)
-        self._color = "#748094"
+        self._color = self.palette().color(QPalette.ColorRole.PlaceholderText).name()
         self._search_action = None
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -87,7 +87,7 @@ class CopyLineEdit(QLineEdit):
         super().__init__(text, parent)
         self.setReadOnly(True)
         self.setCursorPosition(0)
-        self._color = "#A7B1C2"
+        self._color = self.palette().color(QPalette.ColorRole.PlaceholderText).name()
         self._copy_action = self.addAction(
             icon("copy", self._color, 16), QLineEdit.ActionPosition.TrailingPosition
         )
@@ -122,13 +122,14 @@ class CopyButton(QPushButton):
     def __init__(
         self,
         value: str = "",
-        color: str = "#A7B1C2",
+        color: str | None = None,
         tooltip: str = "Копировать",
         parent: QWidget | None = None,
     ) -> None:
         """Initialize the CopyButton instance."""
         super().__init__("", parent)
         self.setObjectName("IconButton")
+        color = color or self.palette().color(QPalette.ColorRole.PlaceholderText).name()
         self.setIcon(icon("copy", color, 16))
         self.setIconSize(QSize(16, 16))
         self.setFixedSize(30, 30)
@@ -407,8 +408,8 @@ class PasswordField(QLineEdit):
         """Initialize the PasswordField instance."""
         super().__init__(parent)
         self.setEchoMode(QLineEdit.EchoMode.Password)
-        self.setToolTip("Пароль для подключения к локальному прокси")
-        self._color = "#A7B1C2"
+        self.setToolTip("Скрытое значение: пароль или приватный ключ")
+        self._color = self.palette().color(QPalette.ColorRole.PlaceholderText).name()
         self._action = self.addAction(
             icon("eye", self._color, 16), QLineEdit.ActionPosition.TrailingPosition
         )

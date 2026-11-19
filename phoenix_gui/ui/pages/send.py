@@ -113,8 +113,8 @@ class SendPage(ScrollPage):
             self.summary_amount.value_label,
             self.summary_change.value_label,
             self.summary_inputs.value_label,
-            self.coin_table.viewport(),
         )
+        self.protect_table(self.coin_table, [3])
 
         self._switch_mode("simple")
 
@@ -303,8 +303,10 @@ class SendPage(ScrollPage):
         self.send_button.setEnabled(False)
         self.send_button.clicked.connect(self._confirm_and_send)
         card.add(self.send_button)
-        QShortcut(QKeySequence("Ctrl+Return"), self, activated=self._confirm_and_send)
-        QShortcut(QKeySequence("Ctrl+Enter"), self, activated=self._confirm_and_send)
+        for sequence in ("Ctrl+Return", "Ctrl+Enter"):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._confirm_and_send)
         self.privacy_note = QLabel(
             "Подпись выполняется локально в прокси. Приватные ключи не передаются."
         )
@@ -394,6 +396,8 @@ class SendPage(ScrollPage):
                     incoming=True,
                     mono_font=self.themes.mono_family,
                     signed=False,
+                    positive=self.tokens.get("positive", "#3DD6A0"),
+                    negative=self.tokens.get("negative", "#FF7070"),
                 ),
             )
             self.coin_table.setItem(
@@ -660,8 +664,23 @@ class SendPage(ScrollPage):
                 expert=self._mode == "expert",
                 parent=self,
             )
+            host = getattr(self.window(), "show_sheet", None)
+            if host is not None:
+                dialog.accepted.connect(
+                    lambda: self._start_send(address, plan, comment, mode)
+                )
+                host(dialog)
+                return
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return
+        self._start_send(address, plan, comment, mode)
+
+    def _start_send(
+        self, address: str, plan: SendPlan, comment: str, mode: str
+    ) -> None:
+        """Run the send worker after confirmation."""
+        if self._sending:
+            return
         self._set_sending(True)
         run_async(
             lambda: self._send_worker(address, plan, comment, mode),

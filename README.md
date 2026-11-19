@@ -24,4 +24,14 @@ python -m phoenix_gui --demo
 ```
 
 Install its lighter dependency set with `pip install -r requirements-gui.txt`.
-See [README_GUI.md](README_GUI.md) for screenshots, hotkeys and architecture notes.
+After that, `python -m phoenix_gui` starts `novacoind` and the local proxy in
+hidden processes and asks for the key-store password once. Existing processes
+are reused. See [README_GUI.md](README_GUI.md) for screenshots, hotkeys,
+legacy `wallet.dat` migration and launch details.
+
+
+## Project links
+
+- Repository: [Y-deva/phoenix_rpc](https://github.com/Y-deva/phoenix_rpc)
+- [FurryDrag0n](https://github.com/FurryDrag0n)
+- [Y-deva](https://github.com/Y-deva)

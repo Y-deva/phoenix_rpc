@@ -7,6 +7,7 @@ of rows at most) and item widgets keep the page code compact.
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
@@ -97,6 +98,18 @@ class SortHeaderView(QHeaderView):
             ]
         painter.drawPolygon(QPolygonF([QPointF(x, y) for x, y in points]))
         painter.restore()
+
+
+_NUMERIC_CELL = re.compile(r"^[+-]?\d[\d.,\s]*$")
+
+
+def _csv_safe(value: str) -> str:
+    """Prevent spreadsheet formula execution without mangling numbers."""
+    if not value or value[0] not in "=+-@\t\r":
+        return value
+    if _NUMERIC_CELL.fullmatch(value):
+        return value
+    return "'" + value
 
 
 class SortableTable(QTableWidget):
@@ -220,21 +233,25 @@ class SortableTable(QTableWidget):
         self._refresh_empty()
 
     def filter_rows(self, text: str) -> int:
-        """Hide rows that do not contain the query; return visible count."""
-        query = (text or "").strip().casefold()
+        """Hide rows missing any whitespace-separated query term."""
+        terms = [term for term in (text or "").casefold().split() if term]
         visible = 0
         for row in range(self.rowCount()):
-            matched = not query
-            if query:
+            matched = True
+            for term in terms:
+                found = False
                 for column in range(self.columnCount()):
                     item = self.item(row, column)
-                    if item is not None and query in item.text().casefold():
-                        matched = True
+                    if item is not None and term in item.text().casefold():
+                        found = True
                         break
                     tooltip = item.toolTip() if item is not None else ""
-                    if query in tooltip.casefold():
-                        matched = True
+                    if term in tooltip.casefold():
+                        found = True
                         break
+                if not found:
+                    matched = False
+                    break
             self.setRowHidden(row, not matched)
             visible += int(matched)
         self._refresh_empty()
@@ -252,7 +269,7 @@ class SortableTable(QTableWidget):
     def export_csv(self, path: str | Path) -> int:
         """Write the visible table to a UTF-8 CSV file."""
         target = Path(path)
-        with target.open("w", encoding="utf-8", newline="") as handle:
+        with target.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle, delimiter=";")
             writer.writerow([column.title for column in self._columns])
             count = 0
@@ -260,7 +277,8 @@ class SortableTable(QTableWidget):
                 values = []
                 for column in range(self.columnCount()):
                     item = self.item(row, column)
-                    values.append(item.text() if item is not None else "")
+                    value = item.text() if item is not None else ""
+                    values.append(_csv_safe(value))
                 writer.writerow(values)
                 count += 1
         return count
@@ -311,6 +329,8 @@ def amount_item(
     mono_font: str = "",
     signed: bool = True,
     places: int = 8,
+    positive: str = "#3DD6A0",
+    negative: str = "#FF7070",
 ) -> SortItem:
     """Build a right aligned, color coded amount cell."""
     if signed:
@@ -323,7 +343,7 @@ def amount_item(
     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     if mono_font:
         item.setFont(QFont(mono_font))
-    color = "#3DD6A0" if incoming else "#FF7070"
+    color = positive if incoming else negative
     item.setForeground(QBrush(QColor(color)))
     return item
 

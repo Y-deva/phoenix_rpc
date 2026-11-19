@@ -79,9 +79,7 @@ class AnalyticsPage(ScrollPage):
             self.balance_card.value_label,
             self.balance_card.caption_label,
             self.received_card.value_label,
-            self.received_card.caption_label,
             self.sent_card.value_label,
-            self.sent_card.caption_label,
         ):
             metrics.addWidget(card, 1)
         self.body.addLayout(metrics)
@@ -133,9 +131,7 @@ class AnalyticsPage(ScrollPage):
             self.balance_card.value_label,
             self.balance_card.caption_label,
             self.received_card.value_label,
-            self.received_card.caption_label,
             self.sent_card.value_label,
-            self.sent_card.caption_label,
             self.activity_chart.canvas,
             self.flow_chart.canvas,
             self.distribution_chart.canvas,

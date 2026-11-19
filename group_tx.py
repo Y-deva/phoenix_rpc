@@ -5,6 +5,7 @@ from kernel_math import nCoinbaseMaturity
 
 MATURITY = nCoinbaseMaturity + 20
 
+
 def handle_listunspent(params, rpc_config=None):
     minconf = int(params[0]) if len(params) > 0 else 0
     maxconf = int(params[1]) if len(params) > 1 else 9999999
@@ -18,7 +19,7 @@ def handle_listunspent(params, rpc_config=None):
     conn = get_db_connection()
     try:
         c = conn.cursor()
-        c.execute('''
+        c.execute("""
             SELECT u.txid, u.vout, u.amount, u.block_height,
                    w.script_hash, w.address,
                    h.category
@@ -26,7 +27,7 @@ def handle_listunspent(params, rpc_config=None):
             LEFT JOIN wallets w ON w.redeem_script = u.redeem_script
             LEFT JOIN history h ON h.txid = u.txid
             WHERE u.spent = 0
-        ''')
+        """)
         rows = c.fetchall()
     finally:
         conn.close()
@@ -48,17 +49,23 @@ def handle_listunspent(params, rpc_config=None):
         if filter_addresses is not None and address not in filter_addresses:
             continue
 
-        spk_hex = script_hash_to_script_pubkey(bytes(script_hash)).hex() if script_hash else ""
+        spk_hex = (
+            script_hash_to_script_pubkey(bytes(script_hash)).hex()
+            if script_hash
+            else ""
+        )
 
-        result.append({
-            "txid": txid,
-            "vout": vout,
-            "address": address or "",
-            "scriptPubKey": spk_hex,
-            "amount": amount_sat / ONE_COIN,
-            "confirmations": confirmations,
-            "spendable": True,
-        })
+        result.append(
+            {
+                "txid": txid,
+                "vout": vout,
+                "address": address or "",
+                "scriptPubKey": spk_hex,
+                "amount": amount_sat / ONE_COIN,
+                "confirmations": confirmations,
+                "spendable": True,
+            }
+        )
 
     return result
 
@@ -82,20 +89,20 @@ def handle_getbalance(params, rpc_config=None):
         c = conn.cursor()
         placeholders = ",".join("?" * len(addresses))
         c.execute(
-            f"SELECT address FROM wallets WHERE account=? AND address IN ({placeholders})",
-            [account_filter] + addresses
+            "SELECT address FROM wallets "
+            f"WHERE account=? AND address IN ({placeholders})",
+            [account_filter] + addresses,
         )
         allowed = {row[0] for row in c.fetchall()}
     finally:
         conn.close()
 
     total = sum(
-        int(u["amount"] * ONE_COIN)
-        for u in utxos
-        if u.get("address") in allowed
+        int(u["amount"] * ONE_COIN) for u in utxos if u.get("address") in allowed
     )
     return total / ONE_COIN
-    
+
+
 def handle_listtransactions(params, rpc_config=None):
     account = params[0] if len(params) > 0 and params[0] else ""
     count = int(params[1]) if len(params) > 1 else 10
@@ -116,14 +123,16 @@ def handle_listtransactions(params, rpc_config=None):
         c = conn.cursor()
         query = """
             SELECT txid, category, amount_net, fee, address, account,
-                   block_height, block_time, n_time
+                   block_height, block_time, n_time, status
             FROM history
         """
         args = []
         if account:
             query += " WHERE account = ?"
             args.append(account)
-        query += " ORDER BY COALESCE(block_time, n_time, created_at) DESC LIMIT ? OFFSET ?"
+        query += (
+            " ORDER BY COALESCE(block_time, n_time, created_at) DESC LIMIT ? OFFSET ?"
+        )
         args.extend([count, from_])
         c.execute(query, args)
         rows = c.fetchall()
@@ -131,15 +140,27 @@ def handle_listtransactions(params, rpc_config=None):
         conn.close()
 
     result = []
-    for (txid, category, amount_net, fee, address, acc,
-         block_height, block_time, n_time) in rows:
-
+    for (
+        txid,
+        category,
+        amount_net,
+        fee,
+        address,
+        acc,
+        block_height,
+        block_time,
+        n_time,
+        status,
+    ) in rows:
         if block_height is None:
             confirmations = 0
         else:
             confirmations = max(0, current_height - block_height + 1)
 
-        if category in ["mined_pow", "mined_pos"]:
+        if status == "orphan":
+            mapped = "orphan"
+            confirmations = 0
+        elif category in ["mined_pow", "mined_pos"]:
             mapped = "immature" if confirmations < maturity else "generate"
         elif category == "consolidate":
             mapped = "send"
@@ -148,6 +169,7 @@ def handle_listtransactions(params, rpc_config=None):
 
         item = {
             "account": acc or "",
+            "status": status or "confirmed",
             "address": address or "",
             "category": mapped,
             "amount": amount_net / ONE_COIN,
@@ -167,6 +189,7 @@ def handle_listtransactions(params, rpc_config=None):
 
     return result
 
+
 def select_inputs(target_sat, only_confirmed=False, rpc_config=None):
     raw = handle_listunspent([0, 9999999, []], rpc_config=rpc_config)
 
@@ -177,16 +200,24 @@ def select_inputs(target_sat, only_confirmed=False, rpc_config=None):
 
     if not utxos:
         return {
-            "target": target_sat, "selected": [], "total": 0,
-            "remainder": 0, "found": False, "strategy": "empty",
+            "target": target_sat,
+            "selected": [],
+            "total": 0,
+            "remainder": 0,
+            "found": False,
+            "strategy": "empty",
         }
 
     for u in utxos:
         amount_sat = int(u["amount"] * ONE_COIN)
         if amount_sat == target_sat:
             return {
-                "target": target_sat, "selected": [u], "total": amount_sat,
-                "remainder": 0, "found": True, "strategy": "exact_single",
+                "target": target_sat,
+                "selected": [u],
+                "total": amount_sat,
+                "remainder": 0,
+                "found": True,
+                "strategy": "exact_single",
             }
 
     candidates = [u for u in utxos if int(u["amount"] * ONE_COIN) >= target_sat]
@@ -194,8 +225,12 @@ def select_inputs(target_sat, only_confirmed=False, rpc_config=None):
         best = min(candidates, key=lambda u: int(u["amount"] * ONE_COIN))
         total = int(best["amount"] * ONE_COIN)
         return {
-            "target": target_sat, "selected": [best], "total": total,
-            "remainder": total - target_sat, "found": True, "strategy": "min_single",
+            "target": target_sat,
+            "selected": [best],
+            "total": total,
+            "remainder": total - target_sat,
+            "found": True,
+            "strategy": "min_single",
         }
 
     selected = []
@@ -207,7 +242,10 @@ def select_inputs(target_sat, only_confirmed=False, rpc_config=None):
             break
 
     return {
-        "target": target_sat, "selected": selected, "total": total,
-        "remainder": total - target_sat, "found": total >= target_sat,
+        "target": target_sat,
+        "selected": selected,
+        "total": total,
+        "remainder": total - target_sat,
+        "found": total >= target_sat,
         "strategy": "greedy_desc",
     }

@@ -63,3 +63,12 @@ debug.log
 
 .DS_Store
 Thumbs.db
+
+# Local C++ dependencies and build trees
+.deps/
+build/
+novacoin-master/src/additional/IXWebSocket/
+novacoin-master/src/additional/leveldb/
+
+# Runtime parser pause marker
+parser.pause

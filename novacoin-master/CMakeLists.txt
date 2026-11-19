@@ -282,7 +282,13 @@ list(APPEND ALL_DEFINITIONS HAVE_BUILD_INFO)
 
 add_executable(novacoin-qt WIN32 ${ALL_SOURCES})
 
-set(liboqs_DIR "/usr/local/lib/cmake/liboqs")
+if(NOT DEFINED liboqs_DIR)
+    if(DEFINED ENV{LIBOQS_DIR})
+        set(liboqs_DIR "$ENV{LIBOQS_DIR}/lib/cmake/liboqs")
+    else()
+        set(liboqs_DIR "/usr/local/lib/cmake/liboqs")
+    endif()
+endif()
 find_package(liboqs REQUIRED)
 
 target_precompile_headers(novacoin-qt

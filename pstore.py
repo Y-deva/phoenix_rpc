@@ -6,10 +6,15 @@ import hashlib
 import requests
 import oqs
 
-from db import get_db_connection
+from db import get_db_connection, wallet_owns_redeem_script
 from helpers import (
-    hash160, base58check_encode, PREFIX_P2SH,
-    parse_tx, serialize_tx, signature_hash, build_script_sig,
+    hash160,
+    base58check_encode,
+    PREFIX_P2SH,
+    parse_tx,
+    serialize_tx,
+    signature_hash,
+    build_script_sig,
     SIGHASH_ALL,
 )
 from newaddress import generate_address
@@ -34,6 +39,7 @@ def set_keys(pubkey: bytes, secret: bytes):
     _pubkey = pubkey
     _secret = secret
 
+
 def _rpc(rpc_config, method, params=None):
     if params is None:
         params = []
@@ -41,8 +47,7 @@ def _rpc(rpc_config, method, params=None):
         rpc_config["url"],
         headers={"Content-Type": "application/json"},
         auth=(rpc_config["user"], rpc_config["password"]),
-        json={"jsonrpc": "1.0", "id": "pstore",
-              "method": method, "params": params},
+        json={"jsonrpc": "1.0", "id": "pstore", "method": method, "params": params},
         timeout=30,
     )
     res = r.json()
@@ -70,17 +75,24 @@ def _get_chain_height(rpc_config):
         except Exception:
             return 0
 
+
 def _varint(i):
-    if i < 0xFD: return struct.pack("<B", i)
-    if i <= 0xFFFF: return b"\xfd" + struct.pack("<H", i)
-    if i <= 0xFFFFFFFF: return b"\xfe" + struct.pack("<I", i)
+    if i < 0xFD:
+        return struct.pack("<B", i)
+    if i <= 0xFFFF:
+        return b"\xfd" + struct.pack("<H", i)
+    if i <= 0xFFFFFFFF:
+        return b"\xfe" + struct.pack("<I", i)
     return b"\xff" + struct.pack("<Q", i)
 
 
 def _varint_len(i):
-    if i < 0xFD: return 1
-    if i <= 0xFFFF: return 3
-    if i <= 0xFFFFFFFF: return 5
+    if i < 0xFD:
+        return 1
+    if i <= 0xFFFF:
+        return 3
+    if i <= 0xFFFFFFFF:
+        return 5
     return 9
 
 
@@ -137,8 +149,7 @@ def _make_pstore_raw(prev_txid, prev_vout, anchor_spk, zero_scripts, n_time):
     return tx.hex()
 
 
-def _make_split_raw(txid_in, vout_in, anchor_spk, change_spk,
-                    change_amount, n_time):
+def _make_split_raw(txid_in, vout_in, anchor_spk, change_spk, change_amount, n_time):
     tx = struct.pack("<I", 1) + struct.pack("<I", n_time)
     tx += _varint(1)
     tx += bytes.fromhex(txid_in)[::-1] + struct.pack("<I", vout_in)
@@ -151,6 +162,7 @@ def _make_split_raw(txid_in, vout_in, anchor_spk, change_spk,
     tx += _varint(len(change_spk)) + change_spk
     tx += struct.pack("<I", 0)
     return tx.hex()
+
 
 def _sign_pstore_tx(raw_hex, redeem_script):
     if _pubkey is None or _secret is None:
@@ -167,8 +179,14 @@ def _sign_pstore_tx(raw_hex, redeem_script):
         raise RuntimeError(f"pstore: expected 1 input, got {len(inputs)}")
 
     sighash = signature_hash(
-        1, ntime, inputs, outputs, 0,
-        redeem_script, SIGHASH_ALL, locktime,
+        1,
+        ntime,
+        inputs,
+        outputs,
+        0,
+        redeem_script,
+        SIGHASH_ALL,
+        locktime,
     )
     with oqs.Signature("Falcon-512", _secret) as signer:
         falcon_sig = signer.sign(sighash)
@@ -183,25 +201,32 @@ def _decode_txid(hex_tx, rpc_config):
 
 
 def _read_anchor(c):
-    c.execute("SELECT txid, vout, redeem_script, address, confirmed "
-              "FROM pstore_anchor WHERE id=1")
+    c.execute(
+        "SELECT txid, vout, redeem_script, address, confirmed "
+        "FROM pstore_anchor WHERE id=1"
+    )
     row = c.fetchone()
     if not row or row[0] is None:
         return None
     return {
-        "txid": row[0], "vout": row[1],
+        "txid": row[0],
+        "vout": row[1],
         "redeem_script": bytes(row[2]),
-        "address": row[3], "confirmed": row[4],
+        "address": row[3],
+        "confirmed": row[4],
     }
 
 
 def _write_anchor(c, txid, vout, redeem_script, address, confirmed):
-    c.execute('''
+    c.execute(
+        """
         UPDATE pstore_anchor
         SET txid=?, vout=?, redeem_script=?, address=?, confirmed=?,
             updated_at=strftime('%s','now')
         WHERE id=1
-    ''', (txid, vout, redeem_script, address, 1 if confirmed else 0))
+    """,
+        (txid, vout, redeem_script, address, 1 if confirmed else 0),
+    )
 
 
 def _validate_anchor(c, anchor):
@@ -209,15 +234,34 @@ def _validate_anchor(c, anchor):
         return None
 
     txid, vout = anchor["txid"], anchor["vout"]
+    if not wallet_owns_redeem_script(c, anchor["redeem_script"]):
+        print("[PSTORE] anchor does not belong to this wallet — resetting")
+        c.execute(
+            """UPDATE pstore_anchor
+               SET txid=NULL, vout=NULL, redeem_script=NULL,
+                   address=NULL, confirmed=0,
+                   updated_at=strftime('%s','now')
+               WHERE id=1"""
+        )
+        return None
 
-    c.execute("SELECT 1 FROM priority_txs WHERE txid=?", (txid,))
-    if c.fetchone():
-        # Pending.
+    c.execute("SELECT confirmed_height FROM priority_txs WHERE txid=?", (txid,))
+    row = c.fetchone()
+    if row and row[0] is None:
+        # The file chain is still waiting for a block.
         if anchor["confirmed"]:
-            # Устаревший флаг — починим.
             anchor["confirmed"] = 0
             c.execute("UPDATE pstore_anchor SET confirmed=0 WHERE id=1")
         return anchor
+    if row:
+        # The last pstore output was already spent by the confirmed chain.
+        # Keep the row until finality, but do not treat it as a live anchor.
+        c.execute("""UPDATE pstore_anchor
+                     SET txid=NULL, vout=NULL, redeem_script=NULL,
+                         address=NULL, confirmed=0,
+                         updated_at=strftime('%s','now')
+                     WHERE id=1""")
+        return None
 
     c.execute("SELECT spent FROM utxos WHERE txid=? AND vout=?", (txid, vout))
     r = c.fetchone()
@@ -229,28 +273,35 @@ def _validate_anchor(c, anchor):
         return anchor
 
     print(f"[PSTORE] anchor {txid[:12]}:{vout} invalid — resetting")
-    c.execute('''UPDATE pstore_anchor
+    c.execute("""UPDATE pstore_anchor
                  SET txid=NULL, vout=NULL, redeem_script=NULL,
                      address=NULL, confirmed=0,
                      updated_at=strftime('%s','now')
-                 WHERE id=1''')
+                 WHERE id=1""")
     return None
 
 
 def _try_adopt_existing_anchor(c):
-    c.execute('''
+    c.execute(
+        """
         SELECT u.txid, u.vout, u.redeem_script, u.amount, u.block_height
         FROM utxos u
         WHERE u.spent=0
           AND u.amount = ?
           AND u.block_height IS NOT NULL
+          AND EXISTS (
+              SELECT 1 FROM wallets w
+              WHERE w.redeem_script = u.redeem_script
+          )
           AND NOT EXISTS (
               SELECT 1 FROM priority_txs p
               WHERE p.prev_txid = u.txid AND p.prev_vout = u.vout
           )
         ORDER BY u.block_height DESC
         LIMIT 1
-    ''', (ANCHOR_VALUE,))
+    """,
+        (ANCHOR_VALUE,),
+    )
     row = c.fetchone()
     if not row:
         return None
@@ -264,8 +315,10 @@ def _try_adopt_existing_anchor(c):
         "confirmed": 1,
     }
 
+
 def _pick_split_utxo(c, rpc_config):
-    c.execute('''
+    c.execute(
+        """
         SELECT u.txid, u.vout, u.redeem_script, u.amount, u.block_height,
                h.category
         FROM utxos u
@@ -279,41 +332,54 @@ def _pick_split_utxo(c, rpc_config):
           )
         ORDER BY u.block_height DESC, u.amount ASC
         LIMIT 50
-    ''', (ANCHOR_VALUE + 1000,))
+    """,
+        (ANCHOR_VALUE + 1000,),
+    )
     rows = c.fetchall()
 
     if not rows:
-        c.execute("SELECT COUNT(*), "
-                  "SUM(CASE WHEN spent=0 THEN 1 ELSE 0 END), "
-                  "SUM(CASE WHEN spent=0 AND block_height IS NOT NULL "
-                  "THEN 1 ELSE 0 END), "
-                  "SUM(CASE WHEN spent=0 AND block_height IS NOT NULL "
-                  "AND amount > ? THEN 1 ELSE 0 END) "
-                  "FROM utxos", (ANCHOR_VALUE + 1000,))
+        c.execute(
+            "SELECT COUNT(*), "
+            "SUM(CASE WHEN spent=0 THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN spent=0 AND block_height IS NOT NULL "
+            "THEN 1 ELSE 0 END), "
+            "SUM(CASE WHEN spent=0 AND block_height IS NOT NULL "
+            "AND amount > ? THEN 1 ELSE 0 END) "
+            "FROM utxos",
+            (ANCHOR_VALUE + 1000,),
+        )
         total, unspent, confirmed, eligible = c.fetchone()
-        print(f"[PSTORE] utxos total={total} unspent={unspent} "
-              f"confirmed={confirmed} amount_ok={eligible}")
+        print(
+            f"[PSTORE] utxos total={total} unspent={unspent} "
+            f"confirmed={confirmed} amount_ok={eligible}"
+        )
         return None
 
     now_height = _get_chain_height(rpc_config)
     maturity = nCoinbaseMaturity + 20
-    print(f"[PSTORE] pick_split: now_height={now_height} "
-          f"maturity={maturity} candidates={len(rows)}")
+    print(
+        f"[PSTORE] pick_split: now_height={now_height} "
+        f"maturity={maturity} candidates={len(rows)}"
+    )
 
     for row in rows:
         txid, vout, rs, amount, height, category = row
         if category in ("mined_pow", "mined_pos"):
             conf = now_height - height + 1 if height else 0
             if conf < maturity:
-                print(f"[PSTORE]   skip {txid[:12]}:{vout} "
-                      f"amount={amount} — immature {category} "
-                      f"(conf {conf} < {maturity})")
+                print(
+                    f"[PSTORE]   skip {txid[:12]}:{vout} "
+                    f"amount={amount} — immature {category} "
+                    f"(conf {conf} < {maturity})"
+                )
                 continue
-        print(f"[PSTORE]   pick {txid[:12]}:{vout} amount={amount} "
-              f"height={height} category={category}")
+        print(
+            f"[PSTORE]   pick {txid[:12]}:{vout} amount={amount} "
+            f"height={height} category={category}"
+        )
         return row
 
-    print(f"[PSTORE]   no candidate passed filters")
+    print("[PSTORE]   no candidate passed filters")
     return None
 
 
@@ -321,6 +387,20 @@ def _build_split(rpc_config, change_pubkey_hash, n_time):
     conn = get_db_connection()
     try:
         c = conn.cursor()
+        c.execute(
+            "SELECT COUNT(*) FROM utxos WHERE spent=0 "
+            "AND block_height IS NOT NULL AND amount > ?",
+            (ANCHOR_VALUE + 1000,),
+        )
+        eligible = c.fetchone()[0]
+        if eligible < 2:
+            # The split consumes one input.  With a single eligible coin the
+            # miner would have no kernel left and the package would never be
+            # mined, so fail before creating an unspendable chain.
+            raise RuntimeError(
+                "Для pstore нужны как минимум два подтверждённых UTXO: "
+                "один уйдёт в split, второй нужен майнеру для coinstake"
+            )
         row = _pick_split_utxo(c, rpc_config)
     finally:
         conn.close()
@@ -338,34 +418,43 @@ def _build_split(rpc_config, change_pubkey_hash, n_time):
     change_spk = _p2sh_spk(change_info["redeem_script"])
     change_amount = amount_in - ANCHOR_VALUE
 
-    raw = _make_split_raw(txid_in, vout_in, anchor_spk, change_spk,
-                          change_amount, n_time)
+    raw = _make_split_raw(
+        txid_in, vout_in, anchor_spk, change_spk, change_amount, n_time
+    )
     signed = _sign_pstore_tx(raw, rs_in)
     txid = _decode_txid(signed, rpc_config)
 
-    print(f"[PSTORE] split {txid[:12]} input={txid_in[:12]}:{vout_in} "
-          f"amount={amount_in} change={change_amount}")
+    print(
+        f"[PSTORE] split {txid[:12]} input={txid_in[:12]}:{vout_in} "
+        f"amount={amount_in} change={change_amount}"
+    )
 
     tx_dict = {
         "txid": txid,
         "raw": bytes.fromhex(signed),
-        "kind": "split", "seq": 0,
-        "prev_txid": txid_in, "prev_vout": vout_in,
+        "kind": "split",
+        "seq": 0,
+        "prev_txid": txid_in,
+        "prev_vout": vout_in,
     }
     new_anchor = {
-        "txid": txid, "vout": 0,
+        "txid": txid,
+        "vout": 0,
         "redeem_script": rs_in,
         "address": anchor_address,
     }
     return tx_dict, new_anchor
+
 
 def _group_chunks(chunks_rev):
     groups, cur = [], []
     for chunk in chunks_rev:
         test = cur + [chunk]
         n_conservative = len(test) + 2
-        if (n_conservative <= MAX_ZERO_OUTPUTS
-                and _estimate_tx_size(n_conservative) <= MAX_TX_SIZE):
+        if (
+            n_conservative <= MAX_ZERO_OUTPUTS
+            and _estimate_tx_size(n_conservative) <= MAX_TX_SIZE
+        ):
             cur.append(chunk)
         else:
             if cur:
@@ -377,7 +466,7 @@ def _group_chunks(chunks_rev):
 
 
 def _build_file_chain(data, anchor, rpc_config, n_time):
-    chunks = [data[i:i+DEFAULT_CHUNK] for i in range(0, len(data), DEFAULT_CHUNK)]
+    chunks = [data[i : i + DEFAULT_CHUNK] for i in range(0, len(data), DEFAULT_CHUNK)]
     chunks_rev = chunks[::-1]
     if not chunks_rev:
         raise ValueError("empty file")
@@ -391,8 +480,8 @@ def _build_file_chain(data, anchor, rpc_config, n_time):
     prev_vout = anchor["vout"]
 
     for gi, group in enumerate(groups):
-        is_first = (gi == 0)
-        is_last = (gi == n_groups - 1)
+        is_first = gi == 0
+        is_last = gi == n_groups - 1
 
         zero_scripts = []
         if is_first:
@@ -407,23 +496,25 @@ def _build_file_chain(data, anchor, rpc_config, n_time):
                 f"pstore: {len(zero_scripts)} zero-outputs > {MAX_ZERO_OUTPUTS}"
             )
 
-        raw = _make_pstore_raw(prev_txid, prev_vout, anchor_spk,
-                               zero_scripts, n_time)
+        raw = _make_pstore_raw(prev_txid, prev_vout, anchor_spk, zero_scripts, n_time)
         signed = _sign_pstore_tx(raw, anchor["redeem_script"])
         txid = _decode_txid(signed, rpc_config)
 
-        txs.append({
-            "txid": txid,
-            "raw": bytes.fromhex(signed),
-            "kind": "pstore",
-            "seq": gi,
-            "prev_txid": prev_txid,
-            "prev_vout": prev_vout,
-        })
+        txs.append(
+            {
+                "txid": txid,
+                "raw": bytes.fromhex(signed),
+                "kind": "pstore",
+                "seq": gi,
+                "prev_txid": prev_txid,
+                "prev_vout": prev_vout,
+            }
+        )
         prev_txid = txid
         prev_vout = 0
 
     return txs
+
 
 def handle_pstore(params, rpc_config):
     if not params:
@@ -444,17 +535,34 @@ def handle_pstore(params, rpc_config):
         conn = get_db_connection()
         try:
             c = conn.cursor()
+            c.execute(
+                "SELECT chain_id FROM priority_txs "
+                "WHERE confirmed_height IS NULL LIMIT 1"
+            )
+            pending = c.fetchone()
+            if pending:
+                raise RuntimeError(
+                    "Предыдущий пакет pstore ещё не подтверждён. "
+                    f"Дождитесь блока или отмените цепочку {pending[0][:12]}."
+                )
             anchor = _read_anchor(c)
             anchor = _validate_anchor(c, anchor)
 
             if anchor is None:
                 adopted = _try_adopt_existing_anchor(c)
                 if adopted is not None:
-                    print(f"[PSTORE] adopted existing 1-sat as anchor: "
-                          f"{adopted['txid'][:12]}:{adopted['vout']}")
-                    _write_anchor(c, adopted["txid"], adopted["vout"],
-                                  adopted["redeem_script"],
-                                  adopted["address"], 1)
+                    print(
+                        f"[PSTORE] adopted existing 1-sat as anchor: "
+                        f"{adopted['txid'][:12]}:{adopted['vout']}"
+                    )
+                    _write_anchor(
+                        c,
+                        adopted["txid"],
+                        adopted["vout"],
+                        adopted["redeem_script"],
+                        adopted["address"],
+                        1,
+                    )
                     anchor = adopted
             conn.commit()
         finally:
@@ -467,7 +575,10 @@ def handle_pstore(params, rpc_config):
             print("[PSTORE] no anchor — building split")
             split_tx, anchor = _build_split(rpc_config, pubkey_hash, n_time)
             if split_tx is None:
-                raise RuntimeError("no suitable UTXO to split")
+                raise RuntimeError(
+                    "Нет подтвержденных средств для pstore. "
+                    "Пополните кошелек и дождитесь подтверждения входа."
+                )
             split_txid = split_tx["txid"]
             to_store.append(split_tx)
 
@@ -485,18 +596,31 @@ def handle_pstore(params, rpc_config):
             c.execute("BEGIN IMMEDIATE")
             try:
                 for t in to_store:
-                    c.execute('''
+                    c.execute(
+                        """
                         INSERT OR REPLACE INTO priority_txs
                             (txid, chain_id, kind, seq, raw,
                              prev_txid, prev_vout, size, n_time, comment)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (t["txid"], file_id, t["kind"], t["seq"], t["raw"],
-                          t.get("prev_txid"), t.get("prev_vout"),
-                          len(t["raw"]), n_time, comment))
+                    """,
+                        (
+                            t["txid"],
+                            file_id,
+                            t["kind"],
+                            t["seq"],
+                            t["raw"],
+                            t.get("prev_txid"),
+                            t.get("prev_vout"),
+                            len(t["raw"]),
+                            n_time,
+                            comment,
+                        ),
+                    )
 
                 _write_anchor(
                     c,
-                    txid=file_id, vout=0,
+                    txid=file_id,
+                    vout=0,
                     redeem_script=anchor["redeem_script"],
                     address=anchor["address"],
                     confirmed=0,
@@ -508,8 +632,10 @@ def handle_pstore(params, rpc_config):
         finally:
             conn.close()
 
-    print(f"[PSTORE] queued file_id={file_id[:12]} "
-          f"txs={len(chain)} split={split_txid is not None} n_time={n_time}")
+    print(
+        f"[PSTORE] queued file_id={file_id[:12]} "
+        f"txs={len(chain)} split={split_txid is not None} n_time={n_time}"
+    )
 
     return {
         "file_id": file_id,
@@ -520,13 +646,14 @@ def handle_pstore(params, rpc_config):
         "anchor": f"{file_id[:12]}:0",
     }
 
+
 def handle_pcancel(params, rpc_config=None):
     conn = get_db_connection()
     try:
         c = conn.cursor()
         c.execute("BEGIN IMMEDIATE")
 
-        c.execute("DELETE FROM priority_txs WHERE kind='pstore'")
+        c.execute("DELETE FROM priority_txs WHERE confirmed_height IS NULL")
         cancelled = c.rowcount
 
         new_txid = None
@@ -537,12 +664,13 @@ def handle_pcancel(params, rpc_config=None):
 
         anchor = _read_anchor(c)
         if anchor is not None:
-            c.execute("SELECT 1 FROM priority_txs WHERE txid=?",
-                      (anchor["txid"],))
+            c.execute("SELECT 1 FROM priority_txs WHERE txid=?", (anchor["txid"],))
             in_queue = c.fetchone()
 
-            c.execute("SELECT spent FROM utxos WHERE txid=? AND vout=?",
-                      (anchor["txid"], anchor["vout"]))
+            c.execute(
+                "SELECT spent FROM utxos WHERE txid=? AND vout=?",
+                (anchor["txid"], anchor["vout"]),
+            )
             u = c.fetchone()
 
             if in_queue:
@@ -566,22 +694,20 @@ def handle_pcancel(params, rpc_config=None):
                 new_rs = adopted["redeem_script"]
                 new_addr = adopted["address"]
                 new_confirmed = 1
-                print(f"[PCANCEL] adopted anchor "
-                      f"{new_txid[:12]}:{new_vout}")
+                print(f"[PCANCEL] adopted anchor {new_txid[:12]}:{new_vout}")
 
         if new_txid is None:
-            c.execute('''UPDATE pstore_anchor
+            c.execute("""UPDATE pstore_anchor
                          SET txid=NULL, vout=NULL, redeem_script=NULL,
                              address=NULL, confirmed=0,
                              updated_at=strftime('%s','now')
-                         WHERE id=1''')
+                         WHERE id=1""")
             anchor_str = None
             print("[PCANCEL] anchor reset")
         else:
             _write_anchor(c, new_txid, new_vout, new_rs, new_addr, new_confirmed)
             anchor_str = f"{new_txid[:12]}:{new_vout}"
-            print(f"[PCANCEL] anchor → {anchor_str} "
-                  f"(confirmed={new_confirmed})")
+            print(f"[PCANCEL] anchor → {anchor_str} (confirmed={new_confirmed})")
 
         conn.commit()
     finally:
@@ -589,6 +715,7 @@ def handle_pcancel(params, rpc_config=None):
 
     print(f"[PCANCEL] cancelled={cancelled} pstore txs")
     return {"cancelled": cancelled, "anchor": anchor_str}
+
 
 def _is_op0_marker(vout):
     spk = vout.get("scriptPubKey") or {}
@@ -599,7 +726,7 @@ def _extract_opreturn_payload(vout):
     spk = vout.get("scriptPubKey") or {}
     asm = spk.get("asm", "")
     if asm.startswith("OP_RETURN"):
-        rest = asm[len("OP_RETURN"):].strip()
+        rest = asm[len("OP_RETURN") :].strip()
         if rest:
             try:
                 return bytes.fromhex(rest.replace(" ", ""))
@@ -613,23 +740,16 @@ def _extract_opreturn_payload(vout):
         return None
     push = body[0]
     if push <= 75:
-        return body[1:1 + push]
-    if push == 0x4c:
-        return body[2:2 + body[1]]
-    if push == 0x4d:
+        return body[1 : 1 + push]
+    if push == 0x4C:
+        return body[2 : 2 + body[1]]
+    if push == 0x4D:
         n = int.from_bytes(body[1:3], "little")
-        return body[3:3 + n]
-    if push == 0x4e:
+        return body[3 : 3 + n]
+    if push == 0x4E:
         n = int.from_bytes(body[1:5], "little")
-        return body[5:5 + n]
+        return body[5 : 5 + n]
     return None
-
-
-def _has_trailing_op0(tx):
-    vouts = tx.get("vout") or []
-    if not vouts:
-        return False
-    return _is_op0_marker(vouts[-1])
 
 
 def _fetch_chain(rpc_config, file_id, quiet=False):
@@ -641,26 +761,29 @@ def _fetch_chain(rpc_config, file_id, quiet=False):
         vouts = tx.get("vout") or []
         if not quiet:
             print(f"[PLOAD] tx[{depth}] {current[:12]}... ({len(vouts)} outs)")
+        found_payload = False
         for vout in vouts:
             if _is_op0_marker(vout):
                 continue
             payload = _extract_opreturn_payload(vout)
             if payload:
                 parts.append(payload)
+                found_payload = True
 
-        if _has_trailing_op0(tx):
+        # The final hop is the split (or previous anchor) transaction: it has
+        # outputs but no OP_RETURN payload.  A trailing zero output is just a
+        # per-transaction delimiter and must not stop a multi-tx chain.
+        if not found_payload:
+            if depth == 0:
+                raise RuntimeError("no data found in chain")
             break
 
         vins = tx.get("vin") or []
         if len(vins) != 1:
-            raise RuntimeError(
-                f"tx {current[:12]} has {len(vins)} inputs, expected 1"
-            )
+            raise RuntimeError(f"tx {current[:12]} has {len(vins)} inputs, expected 1")
         prev_txid = vins[0].get("txid")
         if not prev_txid:
-            raise RuntimeError(
-                f"tx {current[:12]} input has no txid (coinbase?)"
-            )
+            raise RuntimeError(f"tx {current[:12]} input has no txid (coinbase?)")
         current = prev_txid
         depth += 1
 
@@ -672,9 +795,11 @@ def _fetch_chain(rpc_config, file_id, quiet=False):
 def _get_downloads_dir():
     import sys
     from pathlib import Path
+
     if sys.platform == "win32":
         try:
             import winreg
+
             key = winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER,
                 r"Software\Microsoft\Windows\CurrentVersion"
@@ -690,8 +815,9 @@ def _get_downloads_dir():
         except Exception:
             pass
     if sys.platform.startswith("linux"):
-        xdg_config = Path(os.environ.get(
-            "XDG_CONFIG_HOME", str(Path.home() / ".config")))
+        xdg_config = Path(
+            os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
+        )
         user_dirs = xdg_config / "user-dirs.dirs"
         if user_dirs.is_file():
             try:
@@ -711,7 +837,6 @@ def _get_downloads_dir():
 
 
 def _unique_path(directory, filename):
-    from pathlib import Path
     dest = directory / filename
     if not dest.exists():
         return dest
@@ -741,6 +866,7 @@ def handle_pload(params, rpc_config, out_dir=None, overwrite=False):
     content = _fetch_chain(rpc_config, file_id, quiet=False)
 
     from pathlib import Path
+
     dest_dir = Path(out_dir) if out_dir else _get_downloads_dir()
     dest_dir.mkdir(parents=True, exist_ok=True)
     filename = f"{file_id}.{ext}"

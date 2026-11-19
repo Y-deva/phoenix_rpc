@@ -9,13 +9,38 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 import threading
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Callable, Sequence
 
 import requests
 from requests.auth import HTTPBasicAuth
 
 Transport = Callable[[str, Sequence[Any]], Any]
+
+
+def _retry_after_seconds(value: str | None) -> float:
+    """Parse both numeric and HTTP-date forms of ``Retry-After``.
+
+    Invalid or past values return zero. The caller caps the final delay.
+    """
+    if not value:
+        return 0.0
+    try:
+        return max(0.0, float(value))
+    except (TypeError, ValueError):
+        pass
+    try:
+        moment = parsedate_to_datetime(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    if moment is None:
+        return 0.0
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return max(0.0, (moment - datetime.now(timezone.utc)).total_seconds())
 
 
 class RPCError(Exception):
@@ -47,6 +72,15 @@ class RPCProtocolError(RPCError):
     """Raised when the proxy returns a malformed response."""
 
 
+class RPCRateLimitedError(RPCError):
+    """Raised when the backend asks the client to slow down."""
+
+    def __init__(self, message: str, retry_after: float = 0.0) -> None:
+        """Store the server cooldown without resetting it on each retry."""
+        super().__init__(message, code=429)
+        self.retry_after = max(0.0, float(retry_after))
+
+
 class RPCClient:
     """Minimal JSON-RPC 1.0 client with per-thread HTTP sessions."""
 
@@ -67,6 +101,9 @@ class RPCClient:
         self._local = threading.local()
         self._id_lock = threading.Lock()
         self._request_id = 0
+        self._limit_lock = threading.Lock()
+        self._limited_until = 0.0
+        self._limit_streak = 0
 
     def _next_id(self) -> int:
         """Return a monotonically increasing request id."""
@@ -108,6 +145,13 @@ class RPCClient:
         if self._transport is not None:
             return self._transport(method, payload_params)
 
+        with self._limit_lock:
+            remaining = self._limited_until - time.monotonic()
+            if remaining > 0:
+                raise RPCRateLimitedError(
+                    "Слишком много запросов к узлу; повторите позже",
+                    remaining,
+                )
         payload = {
             "jsonrpc": "1.0",
             "id": self._next_id(),
@@ -133,6 +177,20 @@ class RPCClient:
             raise RPCAuthError(
                 "Backend rejected the credentials", code=response.status_code
             )
+        if response.status_code == 429:
+            retry_after = _retry_after_seconds(response.headers.get("Retry-After"))
+            with self._limit_lock:
+                self._limit_streak += 1
+                # Cap both the exponent and the server-provided delay: a
+                # bogus far-future HTTP date must not disable the wallet for
+                # years.
+                backoff = min(60.0, float(2 ** min(self._limit_streak, 6)))
+                delay = min(300.0, max(retry_after, backoff))
+                self._limited_until = time.monotonic() + delay
+            raise RPCRateLimitedError(
+                "Узел ограничил частоту запросов (429); клиент временно снизил темп",
+                delay,
+            )
         if response.status_code >= 400:
             message = self._extract_error(response)
             raise RPCProtocolError(message, code=response.status_code)
@@ -155,6 +213,9 @@ class RPCClient:
             raise RPCError(str(error))
         if "result" not in data:
             raise RPCProtocolError("Backend response does not contain a result")
+        with self._limit_lock:
+            self._limit_streak = 0
+            self._limited_until = 0.0
         return data["result"]
 
     @staticmethod

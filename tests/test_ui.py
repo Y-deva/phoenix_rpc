@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import QApplication, QLabel
 from phoenix_gui.core.formatting import shorten_txid
 from phoenix_gui.core.validation import address_from_hash
 from phoenix_gui.demo import DemoService
+from phoenix_gui.rpc.client import RPCError
 from phoenix_gui.ui.dialogs.confirm import ConfirmSendDialog
 from phoenix_gui.ui.dialogs.shortcuts import ShortcutsDialog
 from phoenix_gui.ui.dialogs.tx_details import TxDetailsDialog
@@ -306,32 +307,39 @@ def test_coin_selection_survives_refresh(window, qtbot):
     assert states.count(Qt.CheckState.Checked) == 2
 
 
-def test_privacy_toggle_blurs_balances_and_statistics(window, qtbot):
-    """The eye button hides numeric data globally and restores it."""
+def test_privacy_toggle_covers_balances_and_statistics(window, qtbot):
+    """The eye button covers financial values with particle plaques."""
+    from phoenix_gui.ui.widgets.privacy import PrivacyCellDelegate
+
     window.navigate("overview")
     page = window.current_page
     qtbot.waitUntil(lambda: not page._refreshing, timeout=6000)
-    assert page.balance_label.graphicsEffect() is None
+    assert window.privacy.is_covered(page.balance_label) is False
     assert window.privacy.hidden is False
 
     page.privacy_button.click()
     qtbot.wait(80)
     assert window.privacy.hidden is True
-    assert page.balance_label.graphicsEffect() is not None
-    assert page.activity_chart.canvas.graphicsEffect() is not None
-    assert page.pending_card.value_label.graphicsEffect() is not None
+    assert window.privacy.is_covered(page.balance_label) is True
+    assert window.privacy.is_covered(page.activity_chart.canvas) is True
+    assert window.privacy.is_covered(page.pending_card.value_label) is True
+    assert window.privacy.is_covered(page.pending_card.caption_label) is False
     assert window.settings.get("privacy/hidden") is True
 
     window.navigate("transactions")
     qtbot.waitUntil(lambda: not window.current_page._refreshing, timeout=6000)
-    assert window.current_page.table.viewport().graphicsEffect() is not None
+    table = window.current_page.table
+    amount_delegate = table.itemDelegateForColumn(2)
+    assert isinstance(amount_delegate, PrivacyCellDelegate)
+    assert amount_delegate.hidden is True
+    assert not isinstance(table.itemDelegateForColumn(0), PrivacyCellDelegate)
 
     window.navigate("overview")
     page.privacy_button.click()
     qtbot.wait(80)
     assert window.privacy.hidden is False
-    assert page.balance_label.graphicsEffect() is None
-    assert window.current_page.activity_chart.canvas.graphicsEffect() is None
+    assert window.privacy.is_covered(page.balance_label) is False
+    assert window.privacy.is_covered(page.activity_chart.canvas) is False
 
 
 def test_privacy_state_round_trips_through_settings(settings):
@@ -344,3 +352,112 @@ def test_privacy_state_round_trips_through_settings(settings):
     assert second.hidden is True
     second.set_hidden(False)
     assert settings.get("privacy/hidden") is False
+
+
+def test_developer_contact_links(window):
+    """The settings page exposes the repository and both developer profiles."""
+    window.navigate("settings")
+    page = window._pages["settings"]
+    urls = [button.property("url") for button in page.developer_buttons]
+    assert urls == [
+        "https://github.com/Y-deva/phoenix_rpc",
+        "https://github.com/FurryDrag0n",
+        "https://github.com/Y-deva",
+    ]
+    assert all(
+        button.toolTip() == button.property("url") for button in page.developer_buttons
+    )
+
+
+def test_settings_exposes_legacy_wallet_migration(window):
+    """The settings page links to the migration wizard."""
+    window.navigate("settings")
+    page = window._pages["settings"]
+
+    assert page.migration_button.text() == "Открыть мастер переноса"
+    assert "wallet.dat" in page.migration_button.toolTip()
+    assert page.migrationRequested is not None
+
+
+def test_connection_dialog_opens_and_reports_demo_state(window):
+    """The connection center must open from the main window in demo mode."""
+    window.open_connection_dialog()
+    assert window._connection_dialog is not None
+    assert window._connection_dialog.isVisible()
+    assert not window._connection_dialog.start_all.isEnabled()
+    window._connection_dialog.close()
+
+
+def test_backend_watchdog_starts_stopped_services(window):
+    """The watchdog starts daemon and proxy without user interaction."""
+
+    class FakeBackend:
+        def __init__(self) -> None:
+            self.state = "stopped"
+            self.owned = False
+            self.started = False
+
+        def start(self, *_args) -> None:
+            self.started = True
+            self.state = "running"
+
+        def stop(self) -> None:
+            self.state = "stopped"
+
+        def port_open(self) -> bool:
+            return False
+
+    daemon = FakeBackend()
+    proxy = FakeBackend()
+    window.demo = False
+    window._daemon = daemon
+    window._proxy = proxy
+    window._wallet_password = "test"
+    window._daemon_user_stopped = False
+    window._proxy_user_stopped = False
+    window._proxy_prompt_denied = False
+    window._check_connection = lambda *args, **kwargs: None
+    window._watch_backends()
+    assert daemon.started is True
+    assert proxy.started is True
+
+
+def test_backend_watchdog_respects_manual_stop(window):
+    """A manually stopped service is not restarted by the watchdog."""
+
+    class FakeBackend:
+        state = "stopped"
+        owned = True
+
+        def __init__(self) -> None:
+            self.started = False
+
+        def start(self, *_args) -> None:
+            self.started = True
+
+        def stop(self) -> None:
+            pass
+
+        def port_open(self) -> bool:
+            return False
+
+    daemon = FakeBackend()
+    proxy = FakeBackend()
+    window.demo = False
+    window._daemon = daemon
+    window._proxy = proxy
+    window._daemon_user_stopped = True
+    window._proxy_user_stopped = True
+    window._check_connection = lambda *args, **kwargs: None
+    window._watch_backends()
+    assert daemon.started is False
+    assert proxy.started is False
+
+
+def test_storage_upload_error_is_humanized(window):
+    """pstore insufficiency is explained instead of showing a raw RPC code."""
+    window.navigate("storage")
+    page = window.current_page
+    page._upload_failed(RPCError("no suitable UTXO to split", 400))
+    assert "подтвержденный вход" in page.upload_status.text()
+    assert "code 400" not in page.upload_status.text()
